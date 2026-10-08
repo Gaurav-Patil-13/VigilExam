@@ -1,0 +1,39 @@
+# Exclude Synopsis Report & Documentation Artifacts (as requested)
+Project_Synopsis_VigilExam.pdf
+*.pdf
+implementation_plan.md
+walkthrough.md
+
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Production Build Outputs & Electron Executables
+dist/
+dist-electron/
+out/
+build/
+
+# Local Runtime Database & Storage
+server/vigilexam_store.json
+
+# Cache & Temporary Files
+.vite/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS Generated Files
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Environment Variables & IDE configs
+.env
+.env.local
+.env.development.local
+.env.production.local
+.vscode/
+.idea/

@@ -1,0 +1,73 @@
+{
+  "name": "vigilexam-desktop",
+  "version": "1.0.0",
+  "description": "VigilExam - Secure Online Examination and Proctoring System Desktop Application",
+  "author": "Gaurav Patil, Amit Rane, Ritesh Jagtap, Rugved Ganapule",
+  "main": "electron/main.js",
+  "type": "module",
+
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "server": "node server/index.js",
+    "electron": "electron .",
+    "start": "node server/index.js",
+    "dist": "vite build && cross-env ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/ electron-builder"
+  },
+
+  "build": {
+    "appId": "com.vigilexam.desktop",
+    "productName": "VigilExam",
+
+    "directories": {
+      "output": "release"
+    },
+
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "server/**/*",
+      "package.json"
+    ],
+
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ],
+      "signAndEditExecutable": false
+    },
+
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
+  },
+
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.21.2",
+    "lucide-react": "^0.469.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "recharts": "^2.15.0",
+    "socket.io": "^4.8.1",
+    "socket.io-client": "^4.8.1"
+  },
+
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.0.0",
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "@vitejs/plugin-react": "^4.3.4",
+    "autoprefixer": "^10.4.20",
+    "cross-env": "^7.0.3",
+    "electron": "^33.2.1",
+    "electron-builder": "^25.1.8",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^4.0.0",
+    "vite": "^6.0.7"
+  }
+}
