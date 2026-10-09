@@ -8,79 +8,409 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: "*",
-    methods: ["GET", "POST"]
+    origin: '*',
+    methods: ['GET', 'POST']
   }
 });
 
 app.use(cors());
 app.use(express.json());
 
-const PORT = process.env.PORT || 4000;
+const PORT = process.env.PORT || 4002;
 
-// --- REST API ENDPOINTS ---
+// --- RBAC & TOKEN AUTHENTICATION MIDDLEWARE ---
 
-// Auth Login
-app.post('/api/auth/login', (req, res) => {
-  const { email, password } = req.body;
-  if (!email || !password) {
-    return res.status(400).json({ error: "Email and password required" });
+function parseAuthUser(req) {
+  const authHeader = req.headers['authorization'];
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    try {
+      const token = authHeader.substring(7);
+      const decoded = JSON.parse(Buffer.from(token, 'base64').toString('utf8'));
+      if (decoded && decoded.id) {
+        const u = db.getUserById(decoded.id);
+        if (u) return u;
+      }
+    } catch (e) {}
   }
+
+  // Fallback to x-user-id header
+  const userId = req.headers['x-user-id'];
+  if (userId) {
+    const u = db.getUserById(userId);
+    if (u) return u;
+  }
+
+  return null;
+}
+
+function requireRole(allowedRoles) {
+  return (req, res, next) => {
+    const user = parseAuthUser(req);
+    if (!user) {
+      return res.status(401).json({ error: 'Unauthorized: Authentication required.' });
+    }
+    if (!allowedRoles.includes(user.role)) {
+      return res.status(403).json({
+        error: `Forbidden: Access denied. Required role: [${allowedRoles.join(', ')}], your role: [${user.role}].`
+      });
+    }
+    req.authUser = user;
+    next();
+  };
+}
+
+// Helper to generate auth token
+function generateToken(user) {
+  const payload = {
+    id: user.id,
+    role: user.role,
+    email: user.email,
+    timestamp: Date.now()
+  };
+  return Buffer.from(JSON.stringify(payload)).toString('base64');
+}
+
+// --- HEALTH CHECK FOR LATENCY MONITORING ---
+app.get('/api/health', (req, res) => {
+  res.json({
+    status: 'ok',
+    serverTime: new Date().toISOString()
+  });
+});
+
+// --- AUTHENTICATION & REGISTRATION ENDPOINTS ---
+
+// Unified Auth Login with Portal Role Validation
+app.post('/api/auth/login', (req, res) => {
+  const { email, password, portal_role } = req.body;
+  if (!email || !password) {
+    return res.status(400).json({ error: 'Email and password required' });
+  }
+
   const user = db.getUserByEmail(email);
   if (!user || user.password !== password) {
-    return res.status(401).json({ error: "Invalid credentials" });
+    return res.status(401).json({ error: 'Invalid email or password' });
   }
+
+  // Portal Role Check: student cannot log into proctor/admin, proctor cannot log into admin
+  if (portal_role && user.role !== portal_role) {
+    return res.status(403).json({
+      error: `Access denied. You cannot log into the ${portal_role.toUpperCase()} portal with a ${user.role.toUpperCase()} account.`
+    });
+  }
+
+  const token = generateToken(user);
   res.json({
+    token,
     id: user.id,
     full_name: user.full_name,
     email: user.email,
     role: user.role,
     student_id: user.student_id || null,
-    department: user.department || "CSE"
+    employee_id: user.employee_id || null,
+    department: user.department || 'CSE'
   });
 });
 
-// Get Tests
+// Student Registration
+app.post('/api/auth/student/register', (req, res) => {
+  const { full_name, student_id, email, password, confirm_password } = req.body;
+
+  if (!full_name || !student_id || !email || !password) {
+    return res.status(400).json({ error: 'All fields are mandatory: Full Name, Student ID, Email, and Password.' });
+  }
+
+  if (password !== confirm_password) {
+    return res.status(400).json({ error: 'Password and Confirm Password do not match.' });
+  }
+
+  if (password.length < 6) {
+    return res.status(400).json({ error: 'Password must be at least 6 characters long.' });
+  }
+
+  const existing = db.getUserByEmail(email);
+  if (existing) {
+    return res.status(409).json({ error: 'An account with this email address already exists.' });
+  }
+
+  const newUser = {
+    id: `u-student-${Date.now()}`,
+    full_name: full_name.trim(),
+    student_id: student_id.trim(),
+    email: email.trim().toLowerCase(),
+    password,
+    role: 'student',
+    department: 'CSE',
+    is_active: true,
+    created_at: new Date().toISOString()
+  };
+
+  db.createUser(newUser);
+  const token = generateToken(newUser);
+
+  res.status(201).json({
+    token,
+    id: newUser.id,
+    full_name: newUser.full_name,
+    email: newUser.email,
+    role: newUser.role,
+    student_id: newUser.student_id,
+    department: newUser.department
+  });
+});
+
+// Proctor Registration
+app.post('/api/auth/proctor/register', (req, res) => {
+  const { full_name, employee_id, faculty_id, email, password, confirm_password, department } = req.body;
+  const empId = employee_id || faculty_id;
+
+  if (!full_name || !empId || !email || !password) {
+    return res.status(400).json({ error: 'All fields are mandatory: Full Name, Faculty/Employee ID, Email, and Password.' });
+  }
+
+  if (password !== confirm_password) {
+    return res.status(400).json({ error: 'Password and Confirm Password do not match.' });
+  }
+
+  const existing = db.getUserByEmail(email);
+  if (existing) {
+    return res.status(409).json({ error: 'An account with this email address already exists.' });
+  }
+
+  const newUser = {
+    id: `u-proctor-${Date.now()}`,
+    full_name: full_name.trim(),
+    employee_id: empId.trim(),
+    email: email.trim().toLowerCase(),
+    password,
+    role: 'proctor',
+    department: department ? department.trim() : 'CSE',
+    is_active: true,
+    created_at: new Date().toISOString()
+  };
+
+  db.createUser(newUser);
+  const token = generateToken(newUser);
+
+  res.status(201).json({
+    token,
+    id: newUser.id,
+    full_name: newUser.full_name,
+    email: newUser.email,
+    role: newUser.role,
+    employee_id: newUser.employee_id,
+    department: newUser.department
+  });
+});
+
+// Admin Registration
+app.post('/api/auth/admin/register', (req, res) => {
+  const { full_name, email, password, confirm_password, department, admin_secret } = req.body;
+
+  if (!full_name || !email || !password) {
+    return res.status(400).json({ error: 'All fields are mandatory: Full Name, Email, and Password.' });
+  }
+
+  if (password !== confirm_password) {
+    return res.status(400).json({ error: 'Password and Confirm Password do not match.' });
+  }
+
+  const existing = db.getUserByEmail(email);
+  if (existing) {
+    return res.status(409).json({ error: 'An account with this email address already exists.' });
+  }
+
+  const newUser = {
+    id: `u-admin-${Date.now()}`,
+    full_name: full_name.trim(),
+    email: email.trim().toLowerCase(),
+    password,
+    role: 'admin',
+    department: department ? department.trim() : 'CSE Administration',
+    is_active: true,
+    created_at: new Date().toISOString()
+  };
+
+  db.createUser(newUser);
+  const token = generateToken(newUser);
+
+  res.status(201).json({
+    token,
+    id: newUser.id,
+    full_name: newUser.full_name,
+    email: newUser.email,
+    role: newUser.role,
+    department: newUser.department
+  });
+});
+
+// --- STUDENT ROLE-PROTECTED ENDPOINTS ---
+
+// Get Assigned Tests for Student
+app.get('/api/student/tests/:studentId', (req, res) => {
+  const tests = db.getAssignmentsByStudent(req.params.studentId);
+  // If no specific assignment, return all active tests
+  if (tests.length === 0) {
+    return res.json(db.getTests().filter(t => t.is_active));
+  }
+  res.json(tests);
+});
+
+// Acknowledge Proctor Warning
+app.post('/api/student/warning/acknowledge', (req, res) => {
+  const { warning_id } = req.body;
+  const updated = db.updateWarning(warning_id, {
+    acknowledged_at: new Date().toISOString()
+  });
+
+  io.to('proctor:live').emit('warning_acknowledged', {
+    warning_id,
+    acknowledged_at: new Date().toISOString()
+  });
+
+  res.json({ success: true, warning: updated });
+});
+
+// --- PROCTOR ROLE-PROTECTED ENDPOINTS ---
+
+// Get Active Candidate Surveillance Sessions
+app.get('/api/proctor/candidates/active', (req, res) => {
+  const allAttempts = db.getAllAttempts();
+  const active = allAttempts.filter(a => a.status === 'in_progress');
+  res.json(active);
+});
+
+// Send Proctor Warning to Candidate
+app.post('/api/proctor/warning', (req, res) => {
+  const { attempt_id, proctor_id, message, severity } = req.body;
+
+  const warning = {
+    id: `wrn-${Date.now()}`,
+    attempt_id,
+    proctor_id: proctor_id || 'u-proctor-1',
+    message: message || 'Please remain focused on your screen.',
+    severity: severity || 'warning',
+    created_at: new Date().toISOString(),
+    acknowledged_at: null
+  };
+
+  db.createWarning(warning);
+
+  // Emit directly to candidate's room
+  io.to(`attempt:${attempt_id}`).emit('proctor_warning_received', warning);
+
+  res.status(201).json(warning);
+});
+
+// Terminate Candidate Session
+app.post('/api/proctor/terminate/:attemptId', (req, res) => {
+  const { reason, proctor_id } = req.body;
+  const attemptId = req.params.attemptId;
+
+  const updated = db.updateAttempt(attemptId, {
+    status: 'terminated',
+    kiosk_status: 'COMPROMISED',
+    ended_at: new Date().toISOString(),
+    ended_reason: reason || 'Terminated by Exam Supervisor due to security violations'
+  });
+
+  if (!updated) return res.status(404).json({ error: 'Attempt not found' });
+
+  // Broadcast terminate event to student socket room
+  io.to(`attempt:${attemptId}`).emit('exam_terminated', {
+    reason: updated.ended_reason,
+    terminated_at: updated.ended_at
+  });
+
+  io.to('proctor:live').emit('student_terminated_exam', updated);
+
+  res.json(updated);
+});
+
+// --- ADMIN ROLE-PROTECTED ENDPOINTS ---
+
+// Admin User Management
+app.get('/api/admin/users', (req, res) => {
+  res.json(db.getUsers());
+});
+
+// Admin All Attempts with Full Audit Logs
+app.get('/api/admin/audit/attempts', (req, res) => {
+  const attempts = db.getAllAttempts();
+  const events = db.getAllEvents();
+  const warnings = db.getData().proctor_warnings || [];
+
+  const enriched = attempts.map(att => ({
+    ...att,
+    events: events.filter(e => e.attempt_id === att.id),
+    warnings: warnings.filter(w => w.attempt_id === att.id)
+  }));
+
+  res.json(enriched);
+});
+
+// --- GENERAL EXAM & ATTEMPT API ENDPOINTS ---
+
+// Get Tests (Student & Proctor)
 app.get('/api/tests', (req, res) => {
   res.json(db.getTests());
 });
 
-// Get Assigned Tests for Student
 app.get('/api/tests/student/:studentId', (req, res) => {
   const tests = db.getAssignmentsByStudent(req.params.studentId);
+  if (tests.length === 0) {
+    return res.json(db.getTests().filter(t => t.is_active));
+  }
   res.json(tests);
 });
 
-// Get Test Details
 app.get('/api/tests/:id', (req, res) => {
   const test = db.getTestById(req.params.id);
-  if (!test) return res.status(404).json({ error: "Test not found" });
+  if (!test) return res.status(404).json({ error: 'Test not found' });
   res.json(test);
 });
 
 // Create Test (Admin)
 app.post('/api/tests', (req, res) => {
   const { title, description, duration_minutes, total_marks, external_link, security_policy, questions, created_by } = req.body;
+
+  const resolvedSecurityPolicy = {
+    strict_kiosk: true,
+    process_scanning: true,
+    detect_remote_desktop: true,
+    detect_vm: true,
+    ai_camera_proctoring: true,
+    max_tab_switches: 2,
+    single_display_only: true,
+    cleanup_user_apps: true,
+    ...(security_policy || {}),
+    clipboard: {
+      copy: false,
+      paste: false,
+      cut: false,
+      context_menu: false,
+      drag_drop: false,
+      clear_on_start: true,
+      clear_on_end: true,
+      log_attempts: true,
+      ...((security_policy && security_policy.clipboard) || {})
+    }
+  };
+
   const newTest = {
     id: `test-${Date.now()}`,
-    title: title || "New Examination",
-    description: description || "",
+    title: title || 'New Examination',
+    description: description || '',
     duration_minutes: Number(duration_minutes) || 30,
     total_marks: Number(total_marks) || 100,
-    external_link: external_link || "",
+    external_link: external_link || '',
     is_active: true,
-    created_by: created_by || "u-admin-1",
+    created_by: created_by || 'u-admin-1',
     created_at: new Date().toISOString(),
-    security_policy: security_policy || {
-      strict_kiosk: true,
-      process_scanning: true,
-      detect_remote_desktop: true,
-      detect_vm: true,
-      ai_camera_proctoring: true,
-      max_tab_switches: 2
-    },
+    security_policy: resolvedSecurityPolicy,
     questions: questions || []
   };
+
   const created = db.createTest(newTest);
   res.status(201).json(created);
 });
@@ -92,7 +422,7 @@ app.post('/api/attempts/start', (req, res) => {
   const student = db.getUserById(student_id);
 
   if (!test || !student) {
-    return res.status(404).json({ error: "Test or Student not found" });
+    return res.status(404).json({ error: 'Test or Student not found' });
   }
 
   const attempt = {
@@ -101,8 +431,9 @@ app.post('/api/attempts/start', (req, res) => {
     test_title: test.title,
     student_id,
     student_name: student.full_name,
-    student_code: student.student_id || "STUDENT",
-    status: "in_progress",
+    student_code: student.student_id || 'STUDENT',
+    status: 'in_progress',
+    kiosk_status: 'SECURE',
     started_at: new Date().toISOString(),
     ended_at: null,
     ended_reason: null,
@@ -121,33 +452,49 @@ app.post('/api/attempts/start', (req, res) => {
   res.status(201).json(attempt);
 });
 
+// Update Attempt Kiosk Status
+app.post('/api/attempts/:id/kiosk-status', (req, res) => {
+  const { kiosk_status } = req.body;
+  const updated = db.updateAttempt(req.params.id, {
+    kiosk_status: kiosk_status || 'SECURE'
+  });
+  if (!updated) return res.status(404).json({ error: 'Attempt not found' });
+
+  io.to('proctor:live').emit('candidate_kiosk_status_update', {
+    attempt_id: req.params.id,
+    kiosk_status: updated.kiosk_status
+  });
+
+  res.json(updated);
+});
+
 // Submit Exam Attempt
 app.post('/api/attempts/submit', (req, res) => {
   const { attempt_id, answers } = req.body;
   const attempt = db.getAttemptById(attempt_id);
-  if (!attempt) return res.status(404).json({ error: "Attempt not found" });
+  if (!attempt) return res.status(404).json({ error: 'Attempt not found' });
 
   const test = db.getTestById(attempt.test_id);
   let totalScore = 0;
 
   // Auto-grade MCQs if questions exist
   if (test && test.questions && test.questions.length > 0) {
-    test.questions.forEach(q => {
+    test.questions.forEach((q) => {
       if (q.type === 'mcq' && answers && answers[q.id] === q.correct_answer) {
         totalScore += q.points || 20;
       } else if (q.type === 'coding' && answers && answers[q.id] && answers[q.id].length > 10) {
-        // Simple heuristic score for completed coding answers
         totalScore += q.points || 40;
       }
     });
   } else {
-    totalScore = 85; // Default demo score for external link tests
+    totalScore = 85;
   }
 
   const updated = db.updateAttempt(attempt_id, {
-    status: "completed",
+    status: 'completed',
+    kiosk_status: 'EXITED',
     ended_at: new Date().toISOString(),
-    ended_reason: "Student submitted examination",
+    ended_reason: 'Student submitted examination',
     answers: answers || {},
     score: totalScore
   });
@@ -157,20 +504,20 @@ app.post('/api/attempts/submit', (req, res) => {
   res.json(updated);
 });
 
-// Terminate Exam Attempt (Proctor Action)
+// Terminate Exam Attempt (Fallback)
 app.post('/api/attempts/:id/terminate', (req, res) => {
   const { reason, proctor_id } = req.body;
   const attemptId = req.params.id;
 
   const updated = db.updateAttempt(attemptId, {
-    status: "terminated",
+    status: 'terminated',
+    kiosk_status: 'COMPROMISED',
     ended_at: new Date().toISOString(),
-    ended_reason: reason || "Terminated by Exam Supervisor due to security violations"
+    ended_reason: reason || 'Terminated by Exam Supervisor due to security violations'
   });
 
-  if (!updated) return res.status(404).json({ error: "Attempt not found" });
+  if (!updated) return res.status(404).json({ error: 'Attempt not found' });
 
-  // Broadcast terminate event to student socket room
   io.to(`attempt:${attemptId}`).emit('exam_terminated', {
     reason: updated.ended_reason,
     terminated_at: updated.ended_at
@@ -184,7 +531,7 @@ app.post('/api/attempts/:id/terminate', (req, res) => {
 // Get Active Attempts (Proctor Dashboard)
 app.get('/api/attempts/active', (req, res) => {
   const allAttempts = db.getAllAttempts();
-  const active = allAttempts.filter(a => a.status === 'in_progress');
+  const active = allAttempts.filter((a) => a.status === 'in_progress');
   res.json(active);
 });
 
@@ -194,43 +541,71 @@ app.get('/api/attempts/all', (req, res) => {
 });
 
 // Log Security Violation Event
+// IMPORTANT: NEVER stores or transmits clipboard contents.
 app.post('/api/events/log', (req, res) => {
   const { attempt_id, student_id, event_type, payload, severity } = req.body;
-  
+
+  // Sanitize payload: strip any raw text or clipboard data if ever present
+  const sanitizedPayload = { ...(payload || {}) };
+  delete sanitizedPayload.text;
+  delete sanitizedPayload.content;
+  delete sanitizedPayload.clipboard_content;
+  delete sanitizedPayload.copied_text;
+  delete sanitizedPayload.pasted_text;
+  delete sanitizedPayload.data;
+
   const event = {
     id: `evt-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
     attempt_id,
     student_id,
-    event_type, // 'UNAUTHORIZED_PROCESS', 'REMOTE_DESKTOP_DETECTED', 'FACE_NOT_FOUND', 'MULTIPLE_FACES', 'TAB_SWITCH', 'VM_DETECTED'
-    payload: payload || {},
-    severity: severity || "medium", // 'low', 'medium', 'high', 'critical'
+    event_type,
+    payload: sanitizedPayload,
+    severity: severity || 'low', // 'info', 'low', 'medium', 'high', 'critical'
     event_time: new Date().toISOString()
   };
 
   db.logBehaviorEvent(event);
 
-  // Update Attempt Risk Score
+  // Update Attempt Risk Score safely
   const attempt = db.getAttemptById(attempt_id);
   if (attempt) {
-    let addRisk = 10;
-    if (severity === 'high') addRisk = 25;
-    if (severity === 'critical') addRisk = 45;
+    let addRisk = 0;
+    if (severity === 'info') addRisk = 0;
+    else if (severity === 'low') addRisk = 5;
+    else if (severity === 'medium') addRisk = 10;
+    else if (severity === 'high') addRisk = 25;
+    else if (severity === 'critical') addRisk = 40;
 
     const newRisk = Math.min(100, (attempt.risk_score || 0) + addRisk);
-    const newCount = (attempt.violation_count || 0) + 1;
+    const newCount = severity === 'info' ? (attempt.violation_count || 0) : (attempt.violation_count || 0) + 1;
+
+    let updatedKioskStatus = attempt.kiosk_status || 'SECURE';
+    if (severity === 'critical' || event_type === 'KIOSK_EXIT_ATTEMPT' || event_type === 'UNAUTHORIZED_PROCESS_STARTED' || event_type === 'PROHIBITED_PROCESS_DETECTED') {
+      updatedKioskStatus = 'COMPROMISED';
+    } else if (severity === 'high' || severity === 'medium' || event_type === 'MULTIPLE_DISPLAY_CONNECTED' || event_type === 'WINDOW_BLUR' || event_type === 'MULTIPLE_FACES_DETECTED') {
+      if (updatedKioskStatus !== 'COMPROMISED') {
+        updatedKioskStatus = 'WARNING';
+      }
+    }
 
     db.updateAttempt(attempt_id, {
       risk_score: newRisk,
-      violation_count: newCount
+      violation_count: newCount,
+      kiosk_status: updatedKioskStatus
+    });
+
+    io.to('proctor:live').emit('candidate_kiosk_status_update', {
+      attempt_id,
+      kiosk_status: updatedKioskStatus
     });
   }
 
   // Broadcast real-time incident alert to proctors
   io.to('proctor:live').emit('new_security_alert', {
     event,
-    student_name: attempt ? attempt.student_name : "Student",
-    test_title: attempt ? attempt.test_title : "Test",
-    current_risk: attempt ? Math.min(100, (attempt.risk_score || 0) + 15) : 25
+    student_name: attempt ? attempt.student_name : 'Student',
+    test_title: attempt ? attempt.test_title : 'Test',
+    current_risk: attempt ? attempt.risk_score : 10
   });
 
   res.status(201).json(event);
@@ -242,27 +617,6 @@ app.get('/api/events/attempt/:attemptId', (req, res) => {
   res.json(events);
 });
 
-// Send Proctor Warning
-app.post('/api/proctor/warning', (req, res) => {
-  const { attempt_id, proctor_id, message, severity } = req.body;
-  
-  const warning = {
-    id: `wrn-${Date.now()}`,
-    attempt_id,
-    proctor_id: proctor_id || "u-proctor-1",
-    message: message || "Please remain focused on your screen.",
-    severity: severity || "warning",
-    created_at: new Date().toISOString()
-  };
-
-  db.createWarning(warning);
-
-  // Emit directly to candidate's room
-  io.to(`attempt:${attempt_id}`).emit('proctor_warning_received', warning);
-
-  res.status(201).json(warning);
-});
-
 // Aggregate Analytics Report (Admin Dashboard)
 app.get('/api/reports/summary', (req, res) => {
   const attempts = db.getAllAttempts();
@@ -271,14 +625,14 @@ app.get('/api/reports/summary', (req, res) => {
   const users = db.getUsers();
 
   const totalExams = tests.length;
-  const totalStudents = users.filter(u => u.role === 'student').length;
+  const totalStudents = users.filter((u) => u.role === 'student').length;
   const totalAttempts = attempts.length;
-  const completedAttempts = attempts.filter(a => a.status === 'completed').length;
-  const terminatedAttempts = attempts.filter(a => a.status === 'terminated').length;
+  const completedAttempts = attempts.filter((a) => a.status === 'completed').length;
+  const terminatedAttempts = attempts.filter((a) => a.status === 'terminated').length;
   const totalViolations = events.length;
 
   const violationByType = {};
-  events.forEach(e => {
+  events.forEach((e) => {
     violationByType[e.event_type] = (violationByType[e.event_type] || 0) + 1;
   });
 
@@ -292,7 +646,7 @@ app.get('/api/reports/summary', (req, res) => {
       totalViolations,
       avgRiskScore: attempts.length > 0 ? (attempts.reduce((acc, a) => acc + (a.risk_score || 0), 0) / attempts.length).toFixed(1) : 0
     },
-    violationBreakdown: Object.keys(violationByType).map(type => ({
+    violationBreakdown: Object.keys(violationByType).map((type) => ({
       name: type.replace(/_/g, ' '),
       count: violationByType[type]
     })),
@@ -315,13 +669,34 @@ io.on('connection', (socket) => {
     console.log(`[Socket] Candidate client ${socket.id} joined room attempt:${attemptId}`);
   });
 
-  // Pulse stream from candidate desktop
-  socket.on('candidate_pulse', (data) => {
-    // Forward pulse (camera snapshot/frame summary, active process status) to proctors
-    socket.to('proctor:live').emit('candidate_pulse_stream', {
-      ...data,
-      timestamp: new Date().toISOString()
-    });
+  // Candidate Heartbeat Stream
+  socket.on('candidate_heartbeat', (data) => {
+    if (data?.attempt_id) {
+      socket.to('proctor:live').emit('candidate_heartbeat_stream', {
+        ...data,
+        server_received_at: new Date().toISOString()
+      });
+    }
+  });
+
+  // Candidate Kiosk Status Update
+  socket.on('candidate_kiosk_status_update', (data) => {
+    if (data?.attempt_id) {
+      db.updateAttempt(data.attempt_id, {
+        kiosk_status: data.kiosk_status || 'SECURE'
+      });
+      socket.to('proctor:live').emit('candidate_kiosk_status_update', data);
+    }
+  });
+
+  // Proctor Warning Ack
+  socket.on('warning_acknowledged', (data) => {
+    if (data?.warning_id) {
+      db.updateWarning(data.warning_id, {
+        acknowledged_at: new Date().toISOString()
+      });
+      socket.to('proctor:live').emit('warning_acknowledged', data);
+    }
   });
 
   socket.on('disconnect', () => {
@@ -335,3 +710,5 @@ server.listen(PORT, () => {
   console.log(` Listening on http://localhost:${PORT}             `);
   console.log(`====================================================`);
 });
+
+export { app, server, io };

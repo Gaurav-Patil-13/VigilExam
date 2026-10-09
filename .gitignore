@@ -37,3 +37,8 @@ Desktop.ini
 .env.production.local
 .vscode/
 .idea/
+
+release/
+dist/
+out/
+node_modules/

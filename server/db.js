@@ -80,6 +80,8 @@ const initialData = {
       created_at: new Date().toISOString(),
       security_policy: {
         strict_kiosk: true,
+        single_display_only: true,
+        process_cleanup: true,
         process_scanning: true,
         detect_remote_desktop: true,
         detect_vm: true,
@@ -358,6 +360,22 @@ class DBManager {
   getWarningsByAttempt(attemptId) {
     const db = this.getData();
     return db.proctor_warnings.filter(w => w.attempt_id === attemptId);
+  }
+
+  updateWarning(warningId, updateFields) {
+    const db = this.getData();
+    const index = db.proctor_warnings.findIndex(w => w.id === warningId);
+    if (index !== -1) {
+      db.proctor_warnings[index] = { ...db.proctor_warnings[index], ...updateFields };
+      this.saveData(db);
+      return db.proctor_warnings[index];
+    }
+    return null;
+  }
+
+  getUsersByRole(role) {
+    const db = this.getData();
+    return db.users.filter(u => u.role === role);
   }
 }
 

@@ -1,76 +1,80 @@
-import { contextBridge, ipcRenderer } from 'electron';
+/**
+ * VigilExam - Secure Preload Bridge
+ * 
+ * Exposes strictly controlled desktop capabilities through contextBridge.
+ * Follows Electron security best practices: contextIsolation enabled, nodeIntegration disabled.
+ */
 
-// Track trusted exam security state from main process
-let examActive = false;
-let currentPolicy = null;
+const { contextBridge, ipcRenderer } = require('electron');
 
-ipcRenderer.on('exam-clipboard-security-state', (_event, state) => {
-  if (typeof state === 'boolean') {
-    examActive = state;
-  } else if (state && typeof state === 'object') {
-    examActive = Boolean(state.active);
-    currentPolicy = state.policy || null;
-  }
-});
-
-// Blocked proxy for navigator.clipboard during active exam
-const blockedClipboardProxy = {
-  read: () => Promise.reject(new DOMException('Clipboard access is disabled during this examination.', 'NotAllowedError')),
-  readText: () => Promise.reject(new DOMException('Clipboard access is disabled during this examination.', 'NotAllowedError')),
-  write: () => Promise.reject(new DOMException('Clipboard access is disabled during this examination.', 'NotAllowedError')),
-  writeText: () => Promise.reject(new DOMException('Clipboard access is disabled during this examination.', 'NotAllowedError')),
-  addEventListener: () => {},
-  removeEventListener: () => {},
-  dispatchEvent: () => false
-};
-
-// Protect Chromium navigator.clipboard API
-const originalClipboardDescriptor = Object.getOwnPropertyDescriptor(Navigator.prototype, 'clipboard');
-if (originalClipboardDescriptor?.configurable) {
-  Object.defineProperty(Navigator.prototype, 'clipboard', {
-    configurable: false,
-    enumerable: originalClipboardDescriptor.enumerable,
-    get() {
-      if (examActive) {
-        return blockedClipboardProxy;
-      }
-      return originalClipboardDescriptor.get ? originalClipboardDescriptor.get.call(this) : undefined;
-    }
-  });
-}
-
-// Protect document.execCommand fallback from copy/cut/paste bypass
-const originalExecCommand = Document.prototype.execCommand;
-Document.prototype.execCommand = function (command, ...args) {
-  if (examActive) {
-    const cmd = String(command).toLowerCase();
-    if (cmd === 'copy' || cmd === 'cut' || cmd === 'paste') {
-      return false;
-    }
-  }
-  return originalExecCommand.apply(this, [command, ...args]);
-};
-
-// Narrowly scoped native bridge API.
-// Note: Electron's clipboard module and generic Node.js APIs are NEVER exposed to the renderer.
 contextBridge.exposeInMainWorld('vigilNative', {
-  getSystemDiagnostics: () => ipcRenderer.invoke('get-system-diagnostics'),
-  scanActiveProcesses: () => ipcRenderer.invoke('scan-active-processes'),
+  isDesktopApp: true,
+  isPackagedApp: false, // populated via main process handshake or sync call
+
+  // Process Monitoring & Audit APIs
+  scanProcesses: () => ipcRenderer.invoke('audit-processes'),
+  getSuspiciousProcesses: () => ipcRenderer.invoke('get-suspicious-processes'),
+  captureProcessBaseline: () => ipcRenderer.invoke('capture-process-baseline'),
+  startProcessMonitoring: (intervalMs) => ipcRenderer.invoke('start-process-monitoring', intervalMs),
+  stopProcessMonitoring: () => ipcRenderer.invoke('stop-process-monitoring'),
+  terminateApprovedProcess: (pid, name) => ipcRenderer.invoke('terminate-approved-process', pid, name),
+  closeApplication: (pid, name) => ipcRenderer.invoke('terminate-approved-process', pid, name),
+  closeNonEssentialApplications: () => ipcRenderer.invoke('close-non-essential-apps'),
+
+  // Display Configuration APIs
+  getDisplays: () => ipcRenderer.invoke('get-display-info'),
+
+  // Kiosk Lockdown APIs
   enableKioskMode: () => ipcRenderer.invoke('enable-kiosk-mode'),
   disableKioskMode: () => ipcRenderer.invoke('disable-kiosk-mode'),
+  getKioskState: () => ipcRenderer.invoke('get-kiosk-state'),
+
+  // System Diagnostics
+  getSystemDiagnostics: () => ipcRenderer.invoke('get-system-diagnostics'),
+
+  // Clipboard Security
   setExamClipboardSecurity: (options) => ipcRenderer.invoke('set-exam-clipboard-security', options),
-  getExamClipboardSecurity: () => ipcRenderer.invoke('get-exam-clipboard-security'),
+
+  // Push Event Listeners
+  onKioskExitAttempt: (callback) => {
+    const handler = (_event, data) => callback(data);
+    ipcRenderer.on('kiosk-exit-attempt', handler);
+    return () => ipcRenderer.removeListener('kiosk-exit-attempt', handler);
+  },
+
+  onDisplayConfigurationChanged: (callback) => {
+    const handler = (_event, data) => callback(data);
+    ipcRenderer.on('display-configuration-changed', handler);
+    return () => ipcRenderer.removeListener('display-configuration-changed', handler);
+  },
+
+  onWindowBlur: (callback) => {
+    const handler = (_event, data) => callback(data);
+    ipcRenderer.on('window-blur-event', handler);
+    return () => ipcRenderer.removeListener('window-blur-event', handler);
+  },
+
+  onWindowFocus: (callback) => {
+    const handler = (_event, data) => callback(data);
+    ipcRenderer.on('window-focus-event', handler);
+    return () => ipcRenderer.removeListener('window-focus-event', handler);
+  },
+
   onShortcutBlocked: (callback) => {
-    if (typeof callback !== 'function') return () => {};
-    const listener = (_event, data) => callback(data);
-    ipcRenderer.on('exam-shortcut-blocked', listener);
-    return () => ipcRenderer.removeListener('exam-shortcut-blocked', listener);
+    const handler = (_event, data) => callback(data);
+    ipcRenderer.on('exam-shortcut-blocked', handler);
+    return () => ipcRenderer.removeListener('exam-shortcut-blocked', handler);
   },
-  onClipboardSecurityState: (callback) => {
-    if (typeof callback !== 'function') return () => {};
-    const listener = (_event, data) => callback(data);
-    ipcRenderer.on('exam-clipboard-security-state', listener);
-    return () => ipcRenderer.removeListener('exam-clipboard-security-state', listener);
+
+  onProcessViolation: (callback) => {
+    const handler = (_event, data) => callback(data);
+    ipcRenderer.on('process-violation-event', handler);
+    return () => ipcRenderer.removeListener('process-violation-event', handler);
   },
-  isDesktopApp: true
+
+  onExamClipboardSecurityState: (callback) => {
+    const handler = (_event, data) => callback(data);
+    ipcRenderer.on('exam-clipboard-security-state', handler);
+    return () => ipcRenderer.removeListener('exam-clipboard-security-state', handler);
+  }
 });
