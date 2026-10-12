@@ -23,6 +23,7 @@ import {
 } from 'lucide-react';
 import { preventClipboardActions, normalizeClipboardPolicy } from '../../utils/clipboardSecurity';
 import { faceMonitor } from '../../security/faceMonitor';
+import { API_BASE_URL } from '../../config/api.js';
 import { useSecurityMonitor } from '../../hooks/useSecurityMonitor';
 import { calculateNewRisk, evaluateKioskSecurityState } from '../../security/riskEngine';
 
@@ -71,7 +72,7 @@ export const ExamKiosk = ({ test, attempt, onExamFinished }) => {
     async (eventType, payload = {}, severity = 'low') => {
       if (!attempt) return;
       try {
-        const res = await fetch('http://localhost:4000/api/events/log', {
+        const res = await fetch(`${API_BASE_URL}/api/events/log`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -100,7 +101,7 @@ export const ExamKiosk = ({ test, attempt, onExamFinished }) => {
     (status) => {
       setKioskStatus(status);
       if (attempt?.id) {
-        fetch(`http://localhost:4000/api/attempts/${attempt.id}/kiosk-status`, {
+        fetch(`${API_BASE_URL}/api/attempts/${attempt.id}/kiosk-status`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ kiosk_status: status })
@@ -335,7 +336,7 @@ export const ExamKiosk = ({ test, attempt, onExamFinished }) => {
     cleanupExamEnvironment();
 
     try {
-      const res = await fetch('http://localhost:4000/api/attempts/submit', {
+      const res = await fetch(`${API_BASE_URL}/api/attempts/submit`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
+import { API_BASE_URL } from '../../config/api.js';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 import {
   Cpu,
@@ -53,7 +54,7 @@ export const AdminDashboard = () => {
 
   const fetchSummary = async () => {
     try {
-      const res = await fetch('http://localhost:4000/api/reports/summary');
+      const res = await fetch(`${API_BASE_URL}/api/reports/summary`);
       const data = await res.json();
       setSummary(data);
     } catch (e) {
@@ -63,7 +64,7 @@ export const AdminDashboard = () => {
 
   const fetchTests = async () => {
     try {
-      const res = await fetch('http://localhost:4000/api/tests');
+      const res = await fetch(`${API_BASE_URL}/api/tests`);
       const data = await res.json();
       setTests(data);
     } catch (e) {
@@ -73,7 +74,7 @@ export const AdminDashboard = () => {
 
   const fetchUsers = async () => {
     try {
-      const res = await fetch('http://localhost:4000/api/admin/users');
+      const res = await fetch(`${API_BASE_URL}/api/admin/users`);
       if (res.ok) {
         const data = await res.json();
         setUsersList(data);
@@ -88,7 +89,7 @@ export const AdminDashboard = () => {
     if (!newTitle) return;
 
     try {
-      await fetch('http://localhost:4000/api/tests', {
+      await fetch(`${API_BASE_URL}/api/tests`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

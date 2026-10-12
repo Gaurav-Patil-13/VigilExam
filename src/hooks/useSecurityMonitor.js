@@ -8,6 +8,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useSocket } from '../context/SocketContext';
 import { dispatchSecurityEvent } from '../security/securityEvents';
+import { API_BASE_URL } from '../config/api.js';
 
 export const useSecurityMonitor = ({
   attempt,
@@ -81,7 +82,7 @@ export const useSecurityMonitor = ({
   const acknowledgeWarning = useCallback(async () => {
     if (!activeWarning) return;
     try {
-      await fetch('http://localhost:4000/api/student/warning/acknowledge', {
+      await fetch(`${API_BASE_URL}/api/student/warning/acknowledge`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ warning_id: activeWarning.id })

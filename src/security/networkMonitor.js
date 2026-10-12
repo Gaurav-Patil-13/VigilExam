@@ -5,6 +5,8 @@
  * and tracks Socket.IO connection status.
  */
 
+import { API_BASE_URL } from '../config/api.js';
+
 class NetworkMonitor {
   constructor() {
     this.isOnline = navigator.onLine;
@@ -25,7 +27,7 @@ class NetworkMonitor {
     if (isOnline) {
       try {
         const start = performance.now();
-        const res = await fetch('http://localhost:4000/api/health', {
+        const res = await fetch(`${API_BASE_URL}/api/health`, {
           method: 'GET',
           cache: 'no-store'
         });

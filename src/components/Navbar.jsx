@@ -5,7 +5,7 @@ import { Shield, User, LogOut, Cpu, Radio, Sparkles } from 'lucide-react';
 
 export const Navbar = ({ currentView, setCurrentView }) => {
   const { user, logout } = useAuth();
-  const { connected } = useSocket();
+  const { connected, connectionStatus } = useSocket();
   const isDesktop = window.vigilNative?.isDesktopApp || false;
 
   return (
@@ -48,10 +48,32 @@ export const Navbar = ({ currentView, setCurrentView }) => {
           </div>
 
           <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-xs text-slate-300">
-            <Radio className={`w-3.5 h-3.5 ${connected ? 'text-emerald-400 animate-pulse' : 'text-rose-400'}`} />
+            <Radio
+              className={`w-3.5 h-3.5 ${
+                connectionStatus === 'connected'
+                  ? 'text-emerald-400 animate-pulse'
+                  : connectionStatus === 'connecting' || connectionStatus === 'reconnecting'
+                  ? 'text-amber-400 animate-pulse'
+                  : 'text-rose-400'
+              }`}
+            />
             <span>Socket:</span>
-            <span className={`font-semibold ${connected ? 'text-emerald-400' : 'text-rose-400'}`}>
-              {connected ? 'Connected' : 'Offline'}
+            <span
+              className={`font-semibold ${
+                connectionStatus === 'connected'
+                  ? 'text-emerald-400'
+                  : connectionStatus === 'connecting' || connectionStatus === 'reconnecting'
+                  ? 'text-amber-400'
+                  : 'text-rose-400'
+              }`}
+            >
+              {connectionStatus === 'connected'
+                ? 'Connected'
+                : connectionStatus === 'connecting'
+                ? 'Connecting...'
+                : connectionStatus === 'reconnecting'
+                ? 'Reconnecting...'
+                : 'Offline'}
             </span>
           </div>
         </div>

@@ -19,6 +19,8 @@ import {
   Users
 } from 'lucide-react';
 import { faceMonitor } from '../../security/faceMonitor';
+import { ProcessManagementPanel } from '../../components/ProcessManagementPanel';
+import { API_BASE_URL } from '../../config/api.js';
 
 export const PreCheckRoom = ({ test, onProceedToExam, onCancel }) => {
   // Check statuses: 'checking', 'passed', 'failed', 'warning'
@@ -170,7 +172,7 @@ export const PreCheckRoom = ({ test, onProceedToExam, onCancel }) => {
     setNetworkStatus('checking');
     try {
       const start = performance.now();
-      const res = await fetch('http://localhost:4000/api/health', { cache: 'no-store' });
+      const res = await fetch(`${API_BASE_URL}/api/health`, { cache: 'no-store' });
       const elapsed = Math.round(performance.now() - start);
       if (res.ok) {
         setLatencyMs(elapsed);
@@ -367,13 +369,13 @@ export const PreCheckRoom = ({ test, onProceedToExam, onCancel }) => {
           </div>
         </div>
 
-        {/* Right Card: Native Process Audit & Display Lockdown */}
+        {/* Right Card: Display Lockdown & Network Telemetry */}
         <div className="glass-panel p-6 space-y-4 flex flex-col justify-between border border-slate-800 bg-slate-900/60">
           <div className="space-y-4">
             <div className="flex items-center justify-between">
               <h3 className="text-base font-bold text-white flex items-center gap-2">
-                <Cpu className="w-5 h-5 text-cyan-400" />
-                <span>Background Application Security</span>
+                <ShieldCheck className="w-5 h-5 text-cyan-400" />
+                <span>Hardware & Perimeter Integrity</span>
               </h3>
               <button
                 onClick={runAllDiagnostics}
@@ -424,65 +426,21 @@ export const PreCheckRoom = ({ test, onProceedToExam, onCancel }) => {
               <StatusBadge status={networkStatus} />
             </div>
 
-            {/* Prohibited & User Applications */}
-            {(forbiddenApps.length > 0 || userApps.length > 0) && (
-              <div className="space-y-2 pt-2 border-t border-slate-800">
-                <div className="flex items-center justify-between">
-                  <p className="text-xs font-bold text-amber-300 flex items-center gap-1.5">
-                    <AlertTriangle className="w-4 h-4 text-amber-400" />
-                    <span>Non-Essential Applications ({forbiddenApps.length + userApps.length})</span>
+            {/* Process Security Clearance Summary */}
+            <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-between text-xs">
+              <div className="flex items-center gap-3">
+                <Cpu className="w-5 h-5 text-cyan-400 shrink-0" />
+                <div>
+                  <p className="font-bold text-slate-200">Process Security Status</p>
+                  <p className="text-[11px] text-slate-400">
+                    {forbiddenApps.length > 0
+                      ? `${forbiddenApps.length} prohibited application(s) detected`
+                      : 'Zero prohibited applications running'}
                   </p>
-                  <button
-                    onClick={handleCloseAllApps}
-                    disabled={isClosingApps}
-                    className="px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-[11px] shadow flex items-center gap-1.5 transition-all disabled:opacity-50"
-                  >
-                    <PowerOff className="w-3.5 h-3.5" />
-                    <span>{isClosingApps ? 'Closing Apps...' : 'Close All Non-Essential Apps'}</span>
-                  </button>
-                </div>
-
-                <div className="max-h-36 overflow-y-auto space-y-1.5 pr-1">
-                  {forbiddenApps.concat(userApps).map((appItem) => (
-                    <div
-                      key={appItem.pid}
-                      className="p-2 rounded-lg bg-slate-950 border border-slate-800 flex items-center justify-between text-xs"
-                    >
-                      <div className="flex items-center gap-2">
-                        <span
-                          className={`w-2 h-2 rounded-full ${
-                            appItem.isProhibited || appItem.category === 'PROHIBITED_APPLICATION'
-                              ? 'bg-rose-500'
-                              : 'bg-amber-400'
-                          }`}
-                        />
-                        <span className="font-mono text-slate-200">{appItem.displayName || appItem.name}</span>
-                        <span className="text-[10px] text-slate-500 font-mono">PID: {appItem.pid}</span>
-                        {appItem.reason && (
-                          <span className="text-[9px] text-rose-400/90 font-mono truncate max-w-[140px]">
-                            ({appItem.reason})
-                          </span>
-                        )}
-                      </div>
-                      <button
-                        onClick={() => handleCloseSingleApp(appItem.pid, appItem.name)}
-                        className="p-1 rounded text-slate-400 hover:text-rose-400 transition-colors"
-                        title="Close application"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  ))}
                 </div>
               </div>
-            )}
-
-            {forbiddenApps.length === 0 && userApps.length === 0 && processStatus === 'passed' && (
-              <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 text-xs flex items-center gap-2">
-                <CheckCircle className="w-4 h-4 text-emerald-400 shrink-0" />
-                <span>Zero prohibited background applications running. Process security cleared.</span>
-              </div>
-            )}
+              <StatusBadge status={processStatus} />
+            </div>
           </div>
 
           <div className="pt-2">
@@ -491,6 +449,36 @@ export const PreCheckRoom = ({ test, onProceedToExam, onCancel }) => {
             </p>
           </div>
         </div>
+      </div>
+
+      {/* Dedicated Native Process Management Panel */}
+      <div className="glass-panel p-6 space-y-4 border border-slate-800 bg-slate-900/60 rounded-2xl">
+        <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+          <div className="flex items-center gap-3">
+            <div className="p-2.5 rounded-xl bg-cyan-500/10 border border-cyan-500/30 text-cyan-400">
+              <Cpu className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="text-base font-bold text-white flex items-center gap-2">
+                <span>Native Windows Process Guard & Safe Management</span>
+              </h3>
+              <p className="text-xs text-slate-400">
+                Audit active background applications and safely close unauthorized or unnecessary tools before entering the examination kiosk.
+              </p>
+            </div>
+          </div>
+          <StatusBadge status={processStatus} />
+        </div>
+
+        <ProcessManagementPanel
+          onScanComplete={(res) => {
+            const suspicious = res.suspicious || [];
+            const users = res.userApps || [];
+            setForbiddenApps(suspicious);
+            setUserApps(users);
+            setProcessStatus(suspicious.length === 0 ? 'passed' : 'failed');
+          }}
+        />
       </div>
 
       {/* Action Footer */}

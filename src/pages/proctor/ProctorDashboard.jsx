@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { useSocket } from '../../context/SocketContext';
+import { API_BASE_URL } from '../../config/api.js';
 import {
   Shield,
   Eye,
@@ -167,7 +168,7 @@ export const ProctorDashboard = () => {
 
   const fetchActiveAttempts = async () => {
     try {
-      const res = await fetch('http://localhost:4000/api/attempts/all');
+      const res = await fetch(`${API_BASE_URL}/api/attempts/all`);
       const data = await res.json();
       setActiveCandidates(data);
     } catch (e) {
@@ -178,7 +179,7 @@ export const ProctorDashboard = () => {
   const handleSendWarning = async () => {
     if (!selectedCandidate || !warningMsg) return;
     try {
-      await fetch('http://localhost:4000/api/proctor/warning', {
+      await fetch(`${API_BASE_URL}/api/proctor/warning`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -198,7 +199,7 @@ export const ProctorDashboard = () => {
   const handleTerminateCandidate = async () => {
     if (!selectedCandidate) return;
     try {
-      await fetch(`http://localhost:4000/api/attempts/${selectedCandidate.id}/terminate`, {
+      await fetch(`${API_BASE_URL}/api/attempts/${selectedCandidate.id}/terminate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

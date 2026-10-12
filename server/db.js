@@ -285,6 +285,17 @@ class DBManager {
     return userData;
   }
 
+  updateUser(userId, updateFields) {
+    const data = this.getData();
+    const index = data.users.findIndex(u => u.id === userId);
+    if (index !== -1) {
+      data.users[index] = { ...data.users[index], ...updateFields };
+      this.saveData(data);
+      return data.users[index];
+    }
+    return null;
+  }
+
   getTests() {
     return this.getData().tests;
   }

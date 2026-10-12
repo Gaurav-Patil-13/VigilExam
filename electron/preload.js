@@ -9,7 +9,13 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('vigilNative', {
   isDesktopApp: true,
-  isPackagedApp: false, // populated via main process handshake or sync call
+  isPackagedApp: (() => {
+    try {
+      return ipcRenderer.sendSync('is-packaged-sync');
+    } catch (e) {
+      return false;
+    }
+  })(),
 
   // Process Monitoring & Audit APIs
   scanProcesses: () => ipcRenderer.invoke('audit-processes'),

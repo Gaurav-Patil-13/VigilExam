@@ -138,7 +138,78 @@ export const NON_ESSENTIAL_USER_APPS = new Set([
   'outlook.exe'
 ]);
 
-// 5. Default Security Policy
+// 5. Human-Readable Friendly Names for System & Common Desktop Software
+export const FRIENDLY_PROCESS_NAMES = {
+  'system': 'Windows System Kernel',
+  'system idle process': 'System Idle Process',
+  'registry': 'Windows Registry Subsystem',
+  'smss.exe': 'Session Manager Subsystem',
+  'csrss.exe': 'Client Server Runtime Subsystem',
+  'wininit.exe': 'Windows Initialization',
+  'winlogon.exe': 'Windows Logon Process',
+  'services.exe': 'Windows Services Controller',
+  'lsass.exe': 'Local Security Authority Subsystem',
+  'svchost.exe': 'Host Process for Windows Services',
+  'fontdrvhost.exe': 'Usermode Font Driver Host',
+  'dwm.exe': 'Desktop Window Manager',
+  'explorer.exe': 'Windows Explorer Shell',
+  'sihost.exe': 'Shell Infrastructure Host',
+  'taskhostw.exe': 'Host Process for Windows Tasks',
+  'spoolsv.exe': 'Print Spooler Service',
+  'audiodg.exe': 'Windows Audio Device Graph',
+  'ctfmon.exe': 'CTF Loader (Input Language)',
+  'smartscreen.exe': 'Windows Defender SmartScreen',
+  'msmpeng.exe': 'Microsoft Defender Antivirus',
+  'searchhost.exe': 'Windows Search Host',
+  'runtimebroker.exe': 'Runtime Broker',
+  'conhost.exe': 'Console Window Host',
+  'startmenuexperiencehost.exe': 'Start Menu Experience Host',
+  'shellexperiencehost.exe': 'Windows Shell Experience Host',
+  'textinputhost.exe': 'Windows Text Input Host',
+  'wlanext.exe': 'Windows Wireless LAN Extensibility',
+  'vigilexam.exe': 'VigilExam Secure Desktop',
+  'electron.exe': 'Electron Desktop Runtime',
+  'node.exe': 'Node.js Engine',
+  'powershell.exe': 'Windows PowerShell',
+  'cmd.exe': 'Command Prompt',
+  'git.exe': 'Git Source Control',
+  'chrome.exe': 'Google Chrome Browser',
+  'msedge.exe': 'Microsoft Edge Browser',
+  'firefox.exe': 'Mozilla Firefox Browser',
+  'brave.exe': 'Brave Browser',
+  'opera.exe': 'Opera Browser',
+  'spotify.exe': 'Spotify Music Player',
+  'code.exe': 'Visual Studio Code',
+  'notepad.exe': 'Windows Notepad',
+  'notepad++.exe': 'Notepad++',
+  'steam.exe': 'Steam Client',
+  'epicgameslauncher.exe': 'Epic Games Launcher',
+  'vlc.exe': 'VLC Media Player',
+  'winword.exe': 'Microsoft Word',
+  'excel.exe': 'Microsoft Excel',
+  'powerpnt.exe': 'Microsoft PowerPoint',
+  'outlook.exe': 'Microsoft Outlook',
+  'calculator.exe': 'Calculator',
+  'calculatorapp.exe': 'Calculator',
+  'whatsapp.exe': 'WhatsApp Desktop',
+  'whatsapp.root.exe': 'WhatsApp Desktop',
+  'telegram.exe': 'Telegram Desktop'
+};
+
+export function getProcessDisplayName(exeName, rawName = '') {
+  const norm = (exeName || '').toLowerCase().trim();
+  if (PROHIBITED_PROCESSES_MAP[norm]) {
+    return PROHIBITED_PROCESSES_MAP[norm].name;
+  }
+  if (FRIENDLY_PROCESS_NAMES[norm]) {
+    return FRIENDLY_PROCESS_NAMES[norm];
+  }
+  const clean = (rawName || norm).replace(/\.exe$/i, '').trim();
+  // Capitalize words
+  return clean.replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+// 6. Default Security Policy
 export const DEFAULT_EXAM_POLICY = {
   strict_kiosk: true,
   single_display_only: true,

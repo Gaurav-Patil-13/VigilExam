@@ -35,6 +35,7 @@ export const Login = () => {
   const [studentId, setStudentId] = useState('');
   const [employeeId, setEmployeeId] = useState('');
   const [department, setDepartment] = useState('CSE');
+  const [adminSecret, setAdminSecret] = useState('');
 
   const [formError, setFormError] = useState(null);
 
@@ -45,6 +46,7 @@ export const Login = () => {
     setFullName('');
     setStudentId('');
     setEmployeeId('');
+    setAdminSecret('');
     setFormError(null);
   };
 
@@ -95,12 +97,17 @@ export const Login = () => {
             confirm_password: confirmPassword
           });
         } else if (activePortal === 'admin') {
+          if (!adminSecret.trim()) {
+            setFormError('Administrator Bootstrap Secret Key is required.');
+            return;
+          }
           await registerAdmin({
             full_name: fullName,
             department,
             email,
             password,
-            confirm_password: confirmPassword
+            confirm_password: confirmPassword,
+            admin_secret: adminSecret
           });
         }
       }
@@ -311,6 +318,29 @@ export const Login = () => {
                       className="w-full bg-slate-900 border border-slate-800 rounded-xl pl-10 pr-4 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-slate-700"
                     />
                   </div>
+                </div>
+              )}
+
+              {activePortal === 'admin' && (
+                <div>
+                  <label className="block text-xs font-semibold text-violet-300 mb-1 flex items-center justify-between">
+                    <span>Admin Bootstrap Secret Key</span>
+                    <span className="text-[10px] text-violet-400/80 font-mono">Authorization Key</span>
+                  </label>
+                  <div className="relative">
+                    <KeyRound className="w-4 h-4 absolute left-3.5 top-3.5 text-violet-400" />
+                    <input
+                      type="password"
+                      value={adminSecret}
+                      onChange={(e) => setAdminSecret(e.target.value)}
+                      required
+                      placeholder="Enter Admin Bootstrap Secret"
+                      className="w-full bg-slate-900 border border-violet-500/40 rounded-xl pl-10 pr-4 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-violet-400 font-mono"
+                    />
+                  </div>
+                  <p className="text-[10px] text-slate-500 mt-1">
+                    * Required for initial administrative bootstrap.
+                  </p>
                 </div>
               )}
             </>

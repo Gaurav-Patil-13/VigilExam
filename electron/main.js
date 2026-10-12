@@ -27,18 +27,26 @@ const DEFAULT_CLIPBOARD_POLICY = {
 
 let currentClipboardPolicy = { ...DEFAULT_CLIPBOARD_POLICY };
 
-// Boot embedded backend server in production mode
-if (app.isPackaged) {
-  try {
-    import('../server/index.js')
-      .then(() => {
-        console.info('[ElectronLifecycle] Embedded Express & Socket.io server started on port 4000');
-      })
-      .catch((err) => {
-        console.warn('[ElectronLifecycle] Embedded server start note:', err.message);
-      });
-  } catch (e) {
-    console.warn('[ElectronLifecycle] Embedded server import note:', e.message);
+// Asynchronous embedded backend launcher for production packaged mode
+let serverReadyPromise = null;
+
+async function ensureEmbeddedServer() {
+  if (app.isPackaged) {
+    if (!serverReadyPromise) {
+      serverReadyPromise = (async () => {
+        try {
+          process.env.PORT = '4000';
+          const srv = await import('../server/index.js');
+          if (srv.startServer) {
+            await srv.startServer(4000);
+          }
+          console.info('[ElectronLifecycle] Embedded Express & Socket.io server ready on port 4000');
+        } catch (err) {
+          console.warn('[ElectronLifecycle] Embedded server start warning:', err.message);
+        }
+      })();
+    }
+    await serverReadyPromise;
   }
 }
 
@@ -229,11 +237,17 @@ ipcMain.handle('set-exam-clipboard-security', async (_event, options) => {
   return setExamClipboardSecurity(options);
 });
 
+// App Environment Sync
+ipcMain.on('is-packaged-sync', (event) => {
+  event.returnValue = app.isPackaged;
+});
+
 // --------------------------------------------------
 // APP LIFECYCLE
 // --------------------------------------------------
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  await ensureEmbeddedServer();
   createWindow();
 
   app.on('activate', () => {

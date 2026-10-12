@@ -5,6 +5,8 @@
  * Guarantees clipboard contents are NEVER recorded or transmitted.
  */
 
+import { API_BASE_URL } from '../config/api.js';
+
 export function sanitizePayload(payload) {
   if (!payload || typeof payload !== 'object') return {};
   const cleaned = { ...payload };
@@ -31,7 +33,7 @@ export async function dispatchSecurityEvent({ attemptId, studentId, eventType, s
   };
 
   try {
-    const res = await fetch('http://localhost:4000/api/events/log', {
+    const res = await fetch(`${API_BASE_URL}/api/events/log`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(event)

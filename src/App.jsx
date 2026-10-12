@@ -9,6 +9,7 @@ import { ExamKiosk } from './pages/student/ExamKiosk';
 import { ExamResult } from './pages/student/ExamResult';
 import { ProctorDashboard } from './pages/proctor/ProctorDashboard';
 import { AdminDashboard } from './pages/admin/AdminDashboard';
+import { API_BASE_URL } from './config/api.js';
 
 const MainApp = () => {
   const { user } = useAuth();
@@ -60,7 +61,7 @@ const MainApp = () => {
       return;
     }
     try {
-      const res = await fetch('http://localhost:4000/api/attempts/start', {
+      const res = await fetch(`${API_BASE_URL}/api/attempts/start`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

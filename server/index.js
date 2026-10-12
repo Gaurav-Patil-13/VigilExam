@@ -2,6 +2,7 @@ import express from 'express';
 import http from 'http';
 import { Server } from 'socket.io';
 import cors from 'cors';
+import crypto from 'crypto';
 import { db } from './db.js';
 
 const app = express();
@@ -16,21 +17,84 @@ const io = new Server(server, {
 app.use(cors());
 app.use(express.json());
 
-const PORT = process.env.PORT || 4002;
+const PORT = parseInt(process.env.PORT, 10) || 4000;
+const JWT_SECRET = process.env.VIGILEXAM_JWT_SECRET || 'vigilexam-secure-hmac-key-2026-exam-integrity';
+const ADMIN_BOOTSTRAP_KEY = process.env.ADMIN_BOOTSTRAP_KEY || 'VigilExam-Admin-Root-2026';
 
-// --- RBAC & TOKEN AUTHENTICATION MIDDLEWARE ---
+// --- CRYPTOGRAPHIC PASSWORD HASHING & MIGRATION ---
+
+function hashPassword(password) {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const hash = crypto.scryptSync(password, salt, 64).toString('hex');
+  return `scrypt:${salt}:${hash}`;
+}
+
+function verifyPassword(password, storedPassword) {
+  if (!storedPassword || !password) return false;
+  if (storedPassword.startsWith('scrypt:')) {
+    const parts = storedPassword.split(':');
+    if (parts.length === 3) {
+      const [, salt, hash] = parts;
+      const computed = crypto.scryptSync(password, salt, 64).toString('hex');
+      try {
+        return crypto.timingSafeEqual(Buffer.from(hash, 'hex'), Buffer.from(computed, 'hex'));
+      } catch (e) {
+        return false;
+      }
+    }
+  }
+  // Legacy plain text fallback for backward compatibility
+  return storedPassword === password;
+}
+
+// --- RBAC & SIGNED TOKEN AUTHENTICATION ---
+
+function generateToken(user) {
+  const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url');
+  const payload = Buffer.from(JSON.stringify({
+    id: user.id,
+    role: user.role,
+    email: user.email,
+    exp: Date.now() + 24 * 60 * 60 * 1000 // 24 hours
+  })).toString('base64url');
+  const signature = crypto.createHmac('sha256', JWT_SECRET).update(`${header}.${payload}`).digest('base64url');
+  return `${header}.${payload}.${signature}`;
+}
+
+function verifyToken(token) {
+  if (!token || typeof token !== 'string') return null;
+  const parts = token.split('.');
+  if (parts.length === 3) {
+    const [h, p, s] = parts;
+    const expectedSig = crypto.createHmac('sha256', JWT_SECRET).update(`${h}.${p}`).digest('base64url');
+    try {
+      if (crypto.timingSafeEqual(Buffer.from(s), Buffer.from(expectedSig))) {
+        const decoded = JSON.parse(Buffer.from(p, 'base64url').toString('utf8'));
+        if (decoded && (!decoded.exp || decoded.exp > Date.now())) {
+          return decoded;
+        }
+      }
+    } catch (e) {}
+  }
+
+  // Backward compatibility fallback for legacy unsigned base64 tokens
+  try {
+    const decoded = JSON.parse(Buffer.from(token, 'base64').toString('utf8'));
+    if (decoded && decoded.id) return decoded;
+  } catch (e) {}
+
+  return null;
+}
 
 function parseAuthUser(req) {
   const authHeader = req.headers['authorization'];
   if (authHeader && authHeader.startsWith('Bearer ')) {
-    try {
-      const token = authHeader.substring(7);
-      const decoded = JSON.parse(Buffer.from(token, 'base64').toString('utf8'));
-      if (decoded && decoded.id) {
-        const u = db.getUserById(decoded.id);
-        if (u) return u;
-      }
-    } catch (e) {}
+    const token = authHeader.substring(7);
+    const decoded = verifyToken(token);
+    if (decoded && decoded.id) {
+      const u = db.getUserById(decoded.id);
+      if (u) return u;
+    }
   }
 
   // Fallback to x-user-id header
@@ -59,28 +123,19 @@ function requireRole(allowedRoles) {
   };
 }
 
-// Helper to generate auth token
-function generateToken(user) {
-  const payload = {
-    id: user.id,
-    role: user.role,
-    email: user.email,
-    timestamp: Date.now()
-  };
-  return Buffer.from(JSON.stringify(payload)).toString('base64');
-}
-
-// --- HEALTH CHECK FOR LATENCY MONITORING ---
+// --- HEALTH CHECK FOR LATENCY & CONNECTIVITY MONITORING ---
 app.get('/api/health', (req, res) => {
   res.json({
     status: 'ok',
-    serverTime: new Date().toISOString()
+    port: PORT,
+    serverTime: new Date().toISOString(),
+    version: '1.0.0'
   });
 });
 
 // --- AUTHENTICATION & REGISTRATION ENDPOINTS ---
 
-// Unified Auth Login with Portal Role Validation
+// Unified Auth Login with Portal Role Validation & Secure Password Verification
 app.post('/api/auth/login', (req, res) => {
   const { email, password, portal_role } = req.body;
   if (!email || !password) {
@@ -88,11 +143,18 @@ app.post('/api/auth/login', (req, res) => {
   }
 
   const user = db.getUserByEmail(email);
-  if (!user || user.password !== password) {
+  if (!user || !verifyPassword(password, user.password)) {
     return res.status(401).json({ error: 'Invalid email or password' });
   }
 
-  // Portal Role Check: student cannot log into proctor/admin, proctor cannot log into admin
+  // Automatic Migration: Upgrade legacy plain text passwords to secure scrypt hash on successful login
+  if (!user.password.startsWith('scrypt:')) {
+    const upgraded = hashPassword(password);
+    db.updateUser(user.id, { password: upgraded });
+    user.password = upgraded;
+  }
+
+  // Portal Role Check: strictly prevent accessing another role's portal
   if (portal_role && user.role !== portal_role) {
     return res.status(403).json({
       error: `Access denied. You cannot log into the ${portal_role.toUpperCase()} portal with a ${user.role.toUpperCase()} account.`
@@ -138,7 +200,7 @@ app.post('/api/auth/student/register', (req, res) => {
     full_name: full_name.trim(),
     student_id: student_id.trim(),
     email: email.trim().toLowerCase(),
-    password,
+    password: hashPassword(password),
     role: 'student',
     department: 'CSE',
     is_active: true,
@@ -172,6 +234,10 @@ app.post('/api/auth/proctor/register', (req, res) => {
     return res.status(400).json({ error: 'Password and Confirm Password do not match.' });
   }
 
+  if (password.length < 6) {
+    return res.status(400).json({ error: 'Password must be at least 6 characters long.' });
+  }
+
   const existing = db.getUserByEmail(email);
   if (existing) {
     return res.status(409).json({ error: 'An account with this email address already exists.' });
@@ -182,7 +248,7 @@ app.post('/api/auth/proctor/register', (req, res) => {
     full_name: full_name.trim(),
     employee_id: empId.trim(),
     email: email.trim().toLowerCase(),
-    password,
+    password: hashPassword(password),
     role: 'proctor',
     department: department ? department.trim() : 'CSE',
     is_active: true,
@@ -203,7 +269,7 @@ app.post('/api/auth/proctor/register', (req, res) => {
   });
 });
 
-// Admin Registration
+// Admin Registration (Requires Admin Bootstrap Key)
 app.post('/api/auth/admin/register', (req, res) => {
   const { full_name, email, password, confirm_password, department, admin_secret } = req.body;
 
@@ -215,6 +281,17 @@ app.post('/api/auth/admin/register', (req, res) => {
     return res.status(400).json({ error: 'Password and Confirm Password do not match.' });
   }
 
+  if (password.length < 6) {
+    return res.status(400).json({ error: 'Password must be at least 6 characters long.' });
+  }
+
+  // Enforce administrative bootstrap secret authorization
+  if (!admin_secret || admin_secret.trim() !== ADMIN_BOOTSTRAP_KEY) {
+    return res.status(403).json({
+      error: 'Access denied: Valid Administrator Bootstrap Secret is required to create an Administrator account.'
+    });
+  }
+
   const existing = db.getUserByEmail(email);
   if (existing) {
     return res.status(409).json({ error: 'An account with this email address already exists.' });
@@ -224,7 +301,7 @@ app.post('/api/auth/admin/register', (req, res) => {
     id: `u-admin-${Date.now()}`,
     full_name: full_name.trim(),
     email: email.trim().toLowerCase(),
-    password,
+    password: hashPassword(password),
     role: 'admin',
     department: department ? department.trim() : 'CSE Administration',
     is_active: true,
@@ -704,11 +781,36 @@ io.on('connection', (socket) => {
   });
 });
 
-server.listen(PORT, () => {
-  console.log(`====================================================`);
-  console.log(` VigilExam Express & Socket.io Backend Server Ready `);
-  console.log(` Listening on http://localhost:${PORT}             `);
-  console.log(`====================================================`);
-});
+let serverInstance = null;
 
-export { app, server, io };
+export function startServer(port = PORT) {
+  return new Promise((resolve, reject) => {
+    if (server.listening) {
+      return resolve({ server, port });
+    }
+    serverInstance = server.listen(port, () => {
+      console.log(`====================================================`);
+      console.log(` VigilExam Express & Socket.io Backend Server Ready `);
+      console.log(` Listening on http://localhost:${port}             `);
+      console.log(`====================================================`);
+      resolve({ server, port });
+    });
+    serverInstance.on('error', (err) => {
+      if (err.code === 'EADDRINUSE') {
+        console.warn(`[Server] Port ${port} is already in use, assuming active service.`);
+        resolve({ server, port });
+      } else {
+        reject(err);
+      }
+    });
+  });
+}
+
+// Auto-start server unless explicitly suppressed
+if (process.env.AUTO_START !== 'false') {
+  startServer(PORT).catch((err) => {
+    console.error('[Server] Startup error:', err);
+  });
+}
+
+export { app, server, io, PORT };

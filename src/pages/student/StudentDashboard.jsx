@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { BookOpen, Clock, ShieldCheck, Play, CheckCircle, ExternalLink, AlertTriangle, Layers } from 'lucide-react';
+import { API_BASE_URL } from '../../config/api.js';
 
 export const StudentDashboard = ({ onStartPreCheck }) => {
   const { user } = useAuth();
@@ -8,7 +9,7 @@ export const StudentDashboard = ({ onStartPreCheck }) => {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch(`http://localhost:4000/api/tests/student/${user.id}`)
+    fetch(`${API_BASE_URL}/api/tests/student/${user.id}`)
       .then(res => res.json())
       .then(data => {
         setAssignedTests(data);

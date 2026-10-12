@@ -8,7 +8,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "test": "node test/clipboardSecurity.test.js && node test/kioskSecurity.test.js && node test/fullSystemIntegration.test.js",
+    "test": "node test/clipboardSecurity.test.js && node test/kioskSecurity.test.js && node test/fullSystemIntegration.test.js && node test/authAndProcessDiagnostics.test.js",
     "server": "node server/index.js",
     "electron": "electron .",
     "start": "node server/index.js",
