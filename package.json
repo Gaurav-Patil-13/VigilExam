@@ -8,7 +8,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "test": "node test/clipboardSecurity.test.js && node test/kioskSecurity.test.js && node test/fullSystemIntegration.test.js && node test/authAndProcessDiagnostics.test.js",
+    "test": "node test/clipboardSecurity.test.js && node test/kioskSecurity.test.js && node test/fullSystemIntegration.test.js && node test/authAndProcessDiagnostics.test.js && node test/prohibitedAppsAndMongo.test.js",
     "server": "node server/index.js",
     "electron": "electron .",
     "start": "node server/index.js",
@@ -42,9 +42,12 @@
   },
   "dependencies": {
     "@mediapipe/tasks-vision": "^1.1.0",
+    "bcryptjs": "^3.0.3",
     "cors": "^2.8.5",
+    "dotenv": "^18.0.7",
     "express": "^4.21.2",
     "lucide-react": "^0.469.0",
+    "mongoose": "^9.11.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "recharts": "^2.15.0",

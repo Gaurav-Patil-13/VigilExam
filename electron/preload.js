@@ -26,6 +26,7 @@ contextBridge.exposeInMainWorld('vigilNative', {
   terminateApprovedProcess: (pid, name) => ipcRenderer.invoke('terminate-approved-process', pid, name),
   closeApplication: (pid, name) => ipcRenderer.invoke('terminate-approved-process', pid, name),
   closeNonEssentialApplications: () => ipcRenderer.invoke('close-non-essential-apps'),
+  closeAllProhibitedApplications: () => ipcRenderer.invoke('close-all-prohibited-apps'),
 
   // Display Configuration APIs
   getDisplays: () => ipcRenderer.invoke('get-display-info'),

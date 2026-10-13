@@ -46,11 +46,36 @@ export const AdminDashboard = () => {
   const [policyAiProctoring, setPolicyAiProctoring] = useState(true);
   const [policyMaxSwitches, setPolicyMaxSwitches] = useState(2);
 
+  const [dbStatus, setDbStatus] = useState(null);
+  const [auditLogs, setAuditLogs] = useState([]);
+
   useEffect(() => {
     fetchSummary();
     fetchTests();
     fetchUsers();
+    fetchDbStatus();
+    fetchAuditLogs();
   }, []);
+
+  const fetchDbStatus = async () => {
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/database/status`);
+      if (res.ok) {
+        const data = await res.json();
+        setDbStatus(data);
+      }
+    } catch (e) {}
+  };
+
+  const fetchAuditLogs = async () => {
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/admin/audit/logs`);
+      if (res.ok) {
+        const data = await res.json();
+        setAuditLogs(data);
+      }
+    } catch (e) {}
+  };
 
   const fetchSummary = async () => {
     try {
@@ -151,38 +176,61 @@ export const AdminDashboard = () => {
           </p>
         </div>
 
-        {/* Tab Selector */}
-        <div className="flex bg-slate-900 border border-slate-800 rounded-xl p-1 text-xs">
-          <button
-            onClick={() => setActiveTab('analytics')}
-            className={`px-4 py-2 rounded-lg font-bold transition-all ${
-              activeTab === 'analytics'
-                ? 'bg-violet-600 text-white shadow-lg shadow-violet-600/30'
-                : 'text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            Audit Analytics
-          </button>
-          <button
-            onClick={() => setActiveTab('exams')}
-            className={`px-4 py-2 rounded-lg font-bold transition-all ${
-              activeTab === 'exams'
-                ? 'bg-violet-600 text-white shadow-lg shadow-violet-600/30'
-                : 'text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            Exam Studio
-          </button>
-          <button
-            onClick={() => setActiveTab('users')}
-            className={`px-4 py-2 rounded-lg font-bold transition-all ${
-              activeTab === 'users'
-                ? 'bg-violet-600 text-white shadow-lg shadow-violet-600/30'
-                : 'text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            User Roster
-          </button>
+        {/* Controls and Tab Selector */}
+        <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+          {dbStatus && (
+            <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-800 text-xs font-mono">
+              <span className={`w-2 h-2 rounded-full ${dbStatus.isConnected ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />
+              <span className="text-slate-400">Database:</span>
+              <span className={dbStatus.isConnected ? 'text-emerald-400 font-bold' : 'text-amber-400 font-bold'}>
+                {dbStatus.isConnected ? 'Atlas Connected' : `MongoDB: ${dbStatus.status}`}
+              </span>
+            </div>
+          )}
+
+          {/* Tab Selector */}
+          <div className="flex bg-slate-900 border border-slate-800 rounded-xl p-1 text-xs">
+            <button
+              onClick={() => setActiveTab('analytics')}
+              className={`px-4 py-2 rounded-lg font-bold transition-all ${
+                activeTab === 'analytics'
+                  ? 'bg-violet-600 text-white shadow-lg shadow-violet-600/30'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              Audit Analytics
+            </button>
+            <button
+              onClick={() => setActiveTab('exams')}
+              className={`px-4 py-2 rounded-lg font-bold transition-all ${
+                activeTab === 'exams'
+                  ? 'bg-violet-600 text-white shadow-lg shadow-violet-600/30'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              Exam Studio
+            </button>
+            <button
+              onClick={() => setActiveTab('users')}
+              className={`px-4 py-2 rounded-lg font-bold transition-all ${
+                activeTab === 'users'
+                  ? 'bg-violet-600 text-white shadow-lg shadow-violet-600/30'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              User Roster
+            </button>
+            <button
+              onClick={() => setActiveTab('audit')}
+              className={`px-4 py-2 rounded-lg font-bold transition-all ${
+                activeTab === 'audit'
+                  ? 'bg-violet-600 text-white shadow-lg shadow-violet-600/30'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              Audit Trail
+            </button>
+          </div>
         </div>
       </div>
 
@@ -581,6 +629,58 @@ export const AdminDashboard = () => {
               </div>
             ))}
           </div>
+        </div>
+      )}
+
+      {/* TAB 4: AUDIT TRAIL LOGS */}
+      {activeTab === 'audit' && (
+        <div className="glass-panel p-6 space-y-4 border border-slate-800 bg-slate-900/60">
+          <div className="flex items-center justify-between">
+            <h3 className="text-base font-bold text-white flex items-center gap-2">
+              <FileText className="w-5 h-5 text-violet-400" />
+              <span>Administrative Audit Trail & Security Event Logs</span>
+            </h3>
+            <button
+              onClick={fetchAuditLogs}
+              className="p-1.5 rounded-lg bg-slate-950 border border-slate-800 text-slate-400 hover:text-white transition-colors"
+              title="Refresh audit logs"
+            >
+              <RefreshCw className="w-3.5 h-3.5" />
+            </button>
+          </div>
+
+          {auditLogs.length === 0 ? (
+            <div className="p-8 text-center text-xs text-slate-500">
+              No audit log records recorded yet.
+            </div>
+          ) : (
+            <div className="overflow-x-auto rounded-xl border border-slate-800 bg-slate-950/80">
+              <table className="w-full text-left text-xs border-collapse">
+                <thead>
+                  <tr className="border-b border-slate-800 text-[11px] text-slate-400 font-mono bg-slate-900/40">
+                    <th className="py-2.5 px-3">Timestamp</th>
+                    <th className="py-2.5 px-3">Actor Role</th>
+                    <th className="py-2.5 px-3">Actor ID</th>
+                    <th className="py-2.5 px-3">Action</th>
+                    <th className="py-2.5 px-3">Target</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-850">
+                  {auditLogs.map((log) => (
+                    <tr key={log.id} className="hover:bg-slate-900/40 transition-colors">
+                      <td className="py-2.5 px-3 font-mono text-slate-400 text-[11px]">
+                        {new Date(log.timestamp || log.created_at || Date.now()).toLocaleString()}
+                      </td>
+                      <td className="py-2.5 px-3 font-bold text-violet-300 uppercase">{log.actor_role}</td>
+                      <td className="py-2.5 px-3 font-mono text-slate-300">{log.actor_id}</td>
+                      <td className="py-2.5 px-3 font-mono text-cyan-300 font-semibold">{log.action}</td>
+                      <td className="py-2.5 px-3 text-slate-400">{log.target_resource || '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       )}
     </div>

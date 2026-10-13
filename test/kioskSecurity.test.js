@@ -126,8 +126,21 @@ runTest('VigilExam application and runtime processes are classified as VIGILEXAM
 });
 
 // TEST 3: Prohibited Remote Control & Hacking Tools Classification
-runTest('Forbidden tools (AnyDesk, TeamViewer, OBS, Discord) are classified as BLOCKED_FORBIDDEN', () => {
-  const forbidden = ['anydesk.exe', 'teamviewer.exe', 'vnc.exe', 'obs64.exe', 'discord.exe', 'telegram.exe'];
+runTest('Forbidden tools (AnyDesk, TeamViewer, OBS, Discord, UltraViewer, RustDesk, ChatGPT, Claude) are classified as BLOCKED_FORBIDDEN', () => {
+  const forbidden = [
+    'anydesk.exe',
+    'teamviewer.exe',
+    'ultraviewer.exe',
+    'rustdesk.exe',
+    'vnc.exe',
+    'obs64.exe',
+    'streamlabs.exe',
+    'bandicam.exe',
+    'chatgpt.exe',
+    'claude.exe',
+    'discord.exe',
+    'telegram.exe'
+  ];
 
   for (const proc of forbidden) {
     const category = classifyProcess(proc, 8888);

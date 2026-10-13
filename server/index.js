@@ -3,7 +3,9 @@ import http from 'http';
 import { Server } from 'socket.io';
 import cors from 'cors';
 import crypto from 'crypto';
+import bcrypt from 'bcryptjs';
 import { db } from './db.js';
+import { connectMongoDB, getMongoStatus, isMongoConnected } from './mongodb.js';
 
 const app = express();
 const server = http.createServer(app);
@@ -21,16 +23,19 @@ const PORT = parseInt(process.env.PORT, 10) || 4000;
 const JWT_SECRET = process.env.VIGILEXAM_JWT_SECRET || 'vigilexam-secure-hmac-key-2026-exam-integrity';
 const ADMIN_BOOTSTRAP_KEY = process.env.ADMIN_BOOTSTRAP_KEY || 'VigilExam-Admin-Root-2026';
 
-// --- CRYPTOGRAPHIC PASSWORD HASHING & MIGRATION ---
+// --- BCRYPT PASSWORD HASHING WITH SCRYPT & LEGACY MIGRATION ---
 
 function hashPassword(password) {
-  const salt = crypto.randomBytes(16).toString('hex');
-  const hash = crypto.scryptSync(password, salt, 64).toString('hex');
-  return `scrypt:${salt}:${hash}`;
+  return bcrypt.hashSync(password, 10);
 }
 
 function verifyPassword(password, storedPassword) {
   if (!storedPassword || !password) return false;
+  // Modern standard bcrypt
+  if (storedPassword.startsWith('$2a$') || storedPassword.startsWith('$2b$')) {
+    return bcrypt.compareSync(password, storedPassword);
+  }
+  // Scrypt migration compatibility
   if (storedPassword.startsWith('scrypt:')) {
     const parts = storedPassword.split(':');
     if (parts.length === 3) {
@@ -123,20 +128,26 @@ function requireRole(allowedRoles) {
   };
 }
 
-// --- HEALTH CHECK FOR LATENCY & CONNECTIVITY MONITORING ---
+// --- HEALTH CHECK FOR LATENCY, CONNECTIVITY & DATABASE MONITORING ---
 app.get('/api/health', (req, res) => {
   res.json({
     status: 'ok',
     port: PORT,
     serverTime: new Date().toISOString(),
-    version: '1.0.0'
+    version: '1.0.0',
+    database: getMongoStatus()
   });
+});
+
+// Database Connection & Diagnostic Endpoint
+app.get('/api/database/status', (req, res) => {
+  res.json(getMongoStatus());
 });
 
 // --- AUTHENTICATION & REGISTRATION ENDPOINTS ---
 
 // Unified Auth Login with Portal Role Validation & Secure Password Verification
-app.post('/api/auth/login', (req, res) => {
+app.post('/api/auth/login', async (req, res) => {
   const { email, password, portal_role } = req.body;
   if (!email || !password) {
     return res.status(400).json({ error: 'Email and password required' });
@@ -147,10 +158,10 @@ app.post('/api/auth/login', (req, res) => {
     return res.status(401).json({ error: 'Invalid email or password' });
   }
 
-  // Automatic Migration: Upgrade legacy plain text passwords to secure scrypt hash on successful login
-  if (!user.password.startsWith('scrypt:')) {
+  // Automatic Migration: Upgrade legacy passwords to modern bcrypt hash on successful login
+  if (!user.password.startsWith('$2a$') && !user.password.startsWith('$2b$')) {
     const upgraded = hashPassword(password);
-    db.updateUser(user.id, { password: upgraded });
+    await db.updateUser(user.id, { password: upgraded });
     user.password = upgraded;
   }
 
@@ -160,6 +171,16 @@ app.post('/api/auth/login', (req, res) => {
       error: `Access denied. You cannot log into the ${portal_role.toUpperCase()} portal with a ${user.role.toUpperCase()} account.`
     });
   }
+
+  // Audit Log Entry
+  db.logAudit({
+    id: `aud-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+    actor_id: user.id,
+    actor_role: user.role,
+    action: 'USER_LOGIN',
+    target_resource: user.email,
+    metadata: { portal_role: portal_role || user.role, ip: req.ip }
+  });
 
   const token = generateToken(user);
   res.json({
@@ -208,6 +229,14 @@ app.post('/api/auth/student/register', (req, res) => {
   };
 
   db.createUser(newUser);
+  db.logAudit({
+    id: `aud-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+    actor_id: newUser.id,
+    actor_role: newUser.role,
+    action: 'USER_REGISTER',
+    target_resource: newUser.email,
+    metadata: { role: newUser.role, student_id: newUser.student_id }
+  });
   const token = generateToken(newUser);
 
   res.status(201).json({
@@ -256,6 +285,14 @@ app.post('/api/auth/proctor/register', (req, res) => {
   };
 
   db.createUser(newUser);
+  db.logAudit({
+    id: `aud-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+    actor_id: newUser.id,
+    actor_role: newUser.role,
+    action: 'USER_REGISTER',
+    target_resource: newUser.email,
+    metadata: { role: newUser.role, employee_id: newUser.employee_id }
+  });
   const token = generateToken(newUser);
 
   res.status(201).json({
@@ -309,6 +346,14 @@ app.post('/api/auth/admin/register', (req, res) => {
   };
 
   db.createUser(newUser);
+  db.logAudit({
+    id: `aud-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+    actor_id: newUser.id,
+    actor_role: newUser.role,
+    action: 'USER_REGISTER',
+    target_resource: newUser.email,
+    metadata: { role: newUser.role, department: newUser.department }
+  });
   const token = generateToken(newUser);
 
   res.status(201).json({
@@ -426,6 +471,12 @@ app.get('/api/admin/audit/attempts', (req, res) => {
   res.json(enriched);
 });
 
+// Admin Dedicated Audit Logs (Users, Exams, Security Logins)
+app.get('/api/admin/audit/logs', async (req, res) => {
+  const logs = await db.getAuditLogsAsync();
+  res.json(logs);
+});
+
 // --- GENERAL EXAM & ATTEMPT API ENDPOINTS ---
 
 // Get Tests (Student & Proctor)
@@ -494,12 +545,16 @@ app.post('/api/tests', (req, res) => {
 
 // Start Exam Attempt
 app.post('/api/attempts/start', (req, res) => {
-  const { test_id, student_id } = req.body;
+  const { test_id, student_id, clearance } = req.body;
   const test = db.getTestById(test_id);
   const student = db.getUserById(student_id);
 
   if (!test || !student) {
     return res.status(404).json({ error: 'Test or Student not found' });
+  }
+
+  if (clearance && (clearance.prohibitedCount > 0 || clearance.isProcessPassed === false)) {
+    return res.status(403).json({ error: 'Exam start rejected: Prohibited applications detected on candidate system.' });
   }
 
   const attempt = {
@@ -783,7 +838,17 @@ io.on('connection', (socket) => {
 
 let serverInstance = null;
 
-export function startServer(port = PORT) {
+export async function startServer(port = PORT) {
+  // Attempt MongoDB Atlas connection on startup
+  try {
+    const mongoRes = await connectMongoDB();
+    if (mongoRes?.isConnected) {
+      await db.seedMongoIfEmpty();
+    }
+  } catch (mErr) {
+    console.warn('[Server] MongoDB initialization note:', mErr.message);
+  }
+
   return new Promise((resolve, reject) => {
     if (server.listening) {
       return resolve({ server, port });
@@ -792,6 +857,7 @@ export function startServer(port = PORT) {
       console.log(`====================================================`);
       console.log(` VigilExam Express & Socket.io Backend Server Ready `);
       console.log(` Listening on http://localhost:${port}             `);
+      console.log(` Database: [${getMongoStatus().status}]             `);
       console.log(`====================================================`);
       resolve({ server, port });
     });

@@ -12,7 +12,9 @@ import {
   Layers,
   HelpCircle,
   X,
-  AlertCircle
+  AlertCircle,
+  ShieldCheck,
+  Check
 } from 'lucide-react';
 
 export const ProcessManagementPanel = ({ onScanComplete, compact = false, readOnly = false }) => {
@@ -23,8 +25,13 @@ export const ProcessManagementPanel = ({ onScanComplete, compact = false, readOn
     userAppCount: 0,
     protectedCount: 0,
     unknownCount: 0,
+    devToolCount: 0,
     lastScanTime: null
   });
+
+  // Explicit Examination Process Status states:
+  // 'SCANNING' | 'PROHIBITED APPS FOUND' | 'CLOSING APPLICATIONS' | 'RESCANNING' | 'SECURE ENVIRONMENT READY' | 'BLOCKED — PROHIBITED APPLICATIONS STILL RUNNING'
+  const [panelStatus, setPanelStatus] = useState('SCANNING');
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -37,39 +44,83 @@ export const ProcessManagementPanel = ({ onScanComplete, compact = false, readOn
   // Confirmation Modal state
   const [confirmModal, setConfirmModal] = useState({
     open: false,
-    type: 'single', // 'single' | 'bulk'
+    type: 'single', // 'single' | 'bulk' | 'all_prohibited'
     target: null
   });
 
-  const runScan = async () => {
+  const runScan = async (isRescan = false) => {
     setLoading(true);
     setError(null);
+    if (isRescan) {
+      setPanelStatus('RESCANNING');
+    } else {
+      setPanelStatus('SCANNING');
+    }
 
     try {
       if (window.vigilNative?.scanProcesses) {
         const res = await window.vigilNative.scanProcesses();
         if (res && res.success) {
           const list = res.processes || [];
+          const prohibited = (res.suspicious && res.suspicious.length > 0)
+            ? res.suspicious
+            : list.filter((p) => p.isProhibited);
+          const userApps = (res.userApps && res.userApps.length > 0)
+            ? res.userApps
+            : list.filter((p) => p.category === 'NORMAL_USER_APPLICATION');
+          const protectedApps = (res.protectedProcesses && res.protectedProcesses.length > 0)
+            ? res.protectedProcesses
+            : list.filter((p) => p.isProtected && p.category !== 'UNKNOWN');
+          const unknownApps = (res.unknownProcesses && res.unknownProcesses.length > 0)
+            ? res.unknownProcesses
+            : list.filter((p) => p.category === 'UNKNOWN');
+          const devTools = (res.devTools && res.devTools.length > 0)
+            ? res.devTools
+            : list.filter((p) => p.category === 'DEVELOPMENT_TOOL');
+
           setProcesses(list);
           const newSummary = {
             totalCount: res.totalCount || list.length,
-            prohibitedCount: res.prohibitedCount || list.filter((p) => p.isProhibited).length,
-            userAppCount: res.userAppCount || list.filter((p) => p.category === 'NORMAL_USER_APPLICATION').length,
-            protectedCount: res.protectedCount || list.filter((p) => p.isProtected && p.category !== 'UNKNOWN').length,
-            unknownCount: res.unknownCount || list.filter((p) => p.category === 'UNKNOWN').length,
+            prohibitedCount: prohibited.length,
+            userAppCount: userApps.length,
+            protectedCount: protectedApps.length,
+            unknownCount: unknownApps.length,
+            devToolCount: devTools.length,
             lastScanTime: res.timestamp || new Date().toISOString()
           };
           setSummary(newSummary);
           setSelectedPids(new Set());
 
+          const isBgAllowed = res.allowBackgroundProcesses !== false;
+          if (prohibited.length > 0) {
+            setPanelStatus(isRescan ? 'BLOCKED — PROHIBITED APPLICATIONS STILL RUNNING' : 'PROHIBITED APPS FOUND');
+          } else if (!isBgAllowed && userApps.length > 0) {
+            setPanelStatus('USER APPLICATIONS RUNNING');
+          } else {
+            setPanelStatus('SECURE ENVIRONMENT READY');
+          }
+
           if (onScanComplete) {
-            onScanComplete(res);
+            onScanComplete({
+              ...res,
+              suspicious: prohibited,
+              userApps: userApps,
+              prohibitedCount: prohibited.length,
+              panelStatus: prohibited.length > 0
+                ? (isRescan ? 'BLOCKED — PROHIBITED APPLICATIONS STILL RUNNING' : 'PROHIBITED APPS FOUND')
+                : (!isBgAllowed && userApps.length > 0 ? 'USER APPLICATIONS RUNNING' : 'SECURE ENVIRONMENT READY')
+            });
           }
         } else {
-          setError(res?.error || 'Process scanning failed to query the operating system.');
+          const errText = res?.error || 'Process scanning failed to query the operating system.';
+          setError(errText);
+          setPanelStatus('BLOCKED — PROHIBITED APPLICATIONS STILL RUNNING');
+          if (onScanComplete) {
+            onScanComplete({ success: false, error: errText, suspicious: [], userApps: [] });
+          }
         }
       } else {
-        // Fallback in web preview mode
+        // Fallback in web preview mode without native bridge
         const mockTime = new Date().toISOString();
         setSummary({
           totalCount: 0,
@@ -77,11 +128,21 @@ export const ProcessManagementPanel = ({ onScanComplete, compact = false, readOn
           userAppCount: 0,
           protectedCount: 0,
           unknownCount: 0,
+          devToolCount: 0,
           lastScanTime: mockTime
         });
+        setPanelStatus('SECURE ENVIRONMENT READY');
+        if (onScanComplete) {
+          onScanComplete({ success: true, suspicious: [], userApps: [] });
+        }
       }
     } catch (err) {
-      setError(err.message || 'Error occurred while querying native process monitor.');
+      const errText = err.message || 'Error occurred while querying native process monitor.';
+      setError(errText);
+      setPanelStatus('BLOCKED — PROHIBITED APPLICATIONS STILL RUNNING');
+      if (onScanComplete) {
+        onScanComplete({ success: false, error: errText, suspicious: [], userApps: [] });
+      }
     } finally {
       setLoading(false);
     }
@@ -90,6 +151,11 @@ export const ProcessManagementPanel = ({ onScanComplete, compact = false, readOn
   useEffect(() => {
     runScan();
   }, []);
+
+  // Prohibited processes list
+  const prohibitedProcesses = useMemo(() => {
+    return processes.filter((p) => p.isProhibited);
+  }, [processes]);
 
   // Filtered processes based on search and active tab
   const filteredProcesses = useMemo(() => {
@@ -114,9 +180,10 @@ export const ProcessManagementPanel = ({ onScanComplete, compact = false, readOn
     });
   }, [processes, activeFilter, searchQuery]);
 
-  // Eligible targets for termination
+  // Eligible targets for termination (never protected system, never vigil runtime, never dev tool)
   const isEligibleForTermination = (proc) => {
-    return !proc.isProtected && (proc.isProhibited || proc.category === 'NORMAL_USER_APPLICATION');
+    if (proc.isProtected || proc.category === 'DEVELOPMENT_TOOL') return false;
+    return proc.isProhibited || proc.category === 'NORMAL_USER_APPLICATION';
   };
 
   const eligibleInFiltered = useMemo(() => {
@@ -145,7 +212,7 @@ export const ProcessManagementPanel = ({ onScanComplete, compact = false, readOn
     }
   };
 
-  // Close Single Application Handler
+  // Close Single Application
   const promptCloseSingle = (proc) => {
     setConfirmModal({
       open: true,
@@ -154,7 +221,7 @@ export const ProcessManagementPanel = ({ onScanComplete, compact = false, readOn
     });
   };
 
-  // Close Bulk Applications Handler
+  // Close Bulk Selected Applications
   const promptCloseBulk = () => {
     const targets = processes.filter((p) => selectedPids.has(p.pid) && isEligibleForTermination(p));
     if (targets.length === 0) return;
@@ -165,10 +232,21 @@ export const ProcessManagementPanel = ({ onScanComplete, compact = false, readOn
     });
   };
 
+  // Close All Prohibited Applications (Mandatory Clearance)
+  const promptCloseAllProhibited = () => {
+    if (prohibitedProcesses.length === 0) return;
+    setConfirmModal({
+      open: true,
+      type: 'all_prohibited',
+      target: prohibitedProcesses
+    });
+  };
+
   const executeConfirmedTermination = async () => {
     const { type, target } = confirmModal;
     setConfirmModal({ open: false, type: 'single', target: null });
     setFeedback(null);
+    setPanelStatus('CLOSING APPLICATIONS');
 
     if (type === 'single' && target) {
       setActionInProgress(target.pid);
@@ -191,7 +269,25 @@ export const ProcessManagementPanel = ({ onScanComplete, compact = false, readOn
         setFeedback({ type: 'error', text: err.message });
       } finally {
         setActionInProgress(null);
-        await runScan();
+        await runScan(true);
+      }
+    } else if (type === 'all_prohibited') {
+      setActionInProgress('all_prohibited');
+      try {
+        if (window.vigilNative?.closeAllProhibitedApplications) {
+          const res = await window.vigilNative.closeAllProhibitedApplications();
+          setFeedback({
+            type: res?.isClean ? 'success' : 'error',
+            text: `Clearance complete: ${res?.closedCount || 0} prohibited application(s) closed. ${
+              res?.remainingProhibited?.length || 0
+            } remaining.`
+          });
+        }
+      } catch (err) {
+        setFeedback({ type: 'error', text: err.message });
+      } finally {
+        setActionInProgress(null);
+        await runScan(true);
       }
     } else if (type === 'bulk' && Array.isArray(target)) {
       setActionInProgress('bulk');
@@ -219,12 +315,164 @@ export const ProcessManagementPanel = ({ onScanComplete, compact = false, readOn
       });
 
       setActionInProgress(null);
-      await runScan();
+      await runScan(true);
+    }
+  };
+
+  const getStatusBadgeComponent = () => {
+    switch (panelStatus) {
+      case 'SCANNING':
+        return (
+          <span className="px-3 py-1 rounded-full bg-slate-800 text-slate-300 border border-slate-700 text-xs font-bold font-mono animate-pulse flex items-center gap-1.5">
+            <RefreshCw className="w-3.5 h-3.5 animate-spin text-cyan-400" />
+            <span>SCANNING</span>
+          </span>
+        );
+      case 'PROHIBITED APPS FOUND':
+        return (
+          <span className="px-3 py-1 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/40 text-xs font-bold font-mono flex items-center gap-1.5 animate-bounce">
+            <ShieldAlert className="w-3.5 h-3.5 text-rose-400" />
+            <span>PROHIBITED APPS FOUND</span>
+          </span>
+        );
+      case 'CLOSING APPLICATIONS':
+        return (
+          <span className="px-3 py-1 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/40 text-xs font-bold font-mono flex items-center gap-1.5 animate-pulse">
+            <PowerOff className="w-3.5 h-3.5 text-amber-400" />
+            <span>CLOSING APPLICATIONS</span>
+          </span>
+        );
+      case 'RESCANNING':
+        return (
+          <span className="px-3 py-1 rounded-full bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 text-xs font-bold font-mono flex items-center gap-1.5 animate-pulse">
+            <RefreshCw className="w-3.5 h-3.5 animate-spin text-cyan-400" />
+            <span>RESCANNING</span>
+          </span>
+        );
+      case 'SECURE ENVIRONMENT READY':
+        return (
+          <span className="px-3 py-1 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-xs font-bold font-mono flex items-center gap-1.5">
+            <CheckCircle className="w-3.5 h-3.5 text-emerald-400" />
+            <span>SECURE ENVIRONMENT READY</span>
+          </span>
+        );
+      case 'USER APPLICATIONS RUNNING':
+        return (
+          <span className="px-3 py-1 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/40 text-xs font-bold font-mono flex items-center gap-1.5">
+            <AlertTriangle className="w-3.5 h-3.5 text-amber-400" />
+            <span>USER APPLICATIONS RUNNING</span>
+          </span>
+        );
+      case 'BLOCKED — PROHIBITED APPLICATIONS STILL RUNNING':
+      default:
+        return (
+          <span className="px-3 py-1 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/40 text-xs font-bold font-mono flex items-center gap-1.5">
+            <ShieldAlert className="w-3.5 h-3.5 text-rose-400" />
+            <span>BLOCKED — PROHIBITED APPLICATIONS STILL RUNNING</span>
+          </span>
+        );
     }
   };
 
   return (
     <div className="space-y-4">
+      {/* Real-time Status Strip */}
+      <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div className="flex items-center gap-2 text-xs">
+          <span className="text-slate-400 font-medium">Audit Clearance Status:</span>
+          {getStatusBadgeComponent()}
+        </div>
+
+        {summary.prohibitedCount > 0 && !readOnly && (
+          <button
+            onClick={promptCloseAllProhibited}
+            disabled={actionInProgress !== null}
+            className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white font-bold text-xs shadow-lg shadow-rose-600/30 flex items-center justify-center gap-2 transition-all"
+          >
+            <PowerOff className="w-3.5 h-3.5" />
+            <span>Close All Prohibited Applications ({summary.prohibitedCount})</span>
+          </button>
+        )}
+      </div>
+
+      {/* MANDATORY PROHIBITED APPLICATIONS TABLE (Displayed prominently when violations exist) */}
+      {prohibitedProcesses.length > 0 && (
+        <div className="p-4 rounded-xl bg-rose-950/20 border border-rose-500/40 space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <ShieldAlert className="w-5 h-5 text-rose-400" />
+              <h4 className="text-sm font-black text-rose-200 uppercase tracking-wide">
+                Prohibited Applications Detected ({prohibitedProcesses.length})
+              </h4>
+            </div>
+            <span className="text-[11px] text-rose-400/90 font-mono">
+              Exam entry strictly blocked until resolved
+            </span>
+          </div>
+
+          <div className="overflow-x-auto rounded-lg border border-rose-900/40 bg-slate-950/80">
+            <table className="w-full text-left text-xs border-collapse">
+              <thead>
+                <tr className="border-b border-rose-900/40 text-[11px] text-rose-300 font-mono bg-rose-950/40">
+                  <th className="py-2.5 px-3">Application</th>
+                  <th className="py-2.5 px-3">Category</th>
+                  <th className="py-2.5 px-3 text-right">PID</th>
+                  <th className="py-2.5 px-3 text-center">Status</th>
+                  <th className="py-2.5 px-3 text-right">Action</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-rose-900/20">
+                {prohibitedProcesses.map((proc) => {
+                  const isClosing = actionInProgress === proc.pid || actionInProgress === 'all_prohibited';
+                  return (
+                    <tr key={`${proc.pid}-${proc.name}`} className="hover:bg-rose-950/30 transition-colors">
+                      <td className="py-2.5 px-3 font-bold text-white flex items-center gap-2">
+                        <div className="p-1 rounded bg-rose-500/20 text-rose-400">
+                          <ShieldAlert className="w-3.5 h-3.5" />
+                        </div>
+                        <div>
+                          <span>{proc.displayName || proc.name}</span>
+                          <span className="block text-[10px] text-slate-400 font-mono">{proc.name}</span>
+                        </div>
+                      </td>
+                      <td className="py-2.5 px-3 text-rose-300 text-[11px]">
+                        {proc.subCategoryLabel || proc.categoryLabel}
+                      </td>
+                      <td className="py-2.5 px-3 text-right font-mono text-slate-300 font-bold">{proc.pid}</td>
+                      <td className="py-2.5 px-3 text-center">
+                        <span
+                          className={`px-2 py-0.5 rounded-full text-[10px] font-bold font-mono ${
+                            isClosing
+                              ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30 animate-pulse'
+                              : 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
+                          }`}
+                        >
+                          {isClosing ? 'CLOSING...' : 'RUNNING'}
+                        </span>
+                      </td>
+                      <td className="py-2.5 px-3 text-right">
+                        {!readOnly ? (
+                          <button
+                            onClick={() => promptCloseSingle(proc)}
+                            disabled={actionInProgress !== null}
+                            className="px-3 py-1 rounded-lg bg-rose-500 hover:bg-rose-400 disabled:opacity-40 text-slate-950 font-black text-xs transition-all shadow-sm flex items-center gap-1 ml-auto"
+                          >
+                            <PowerOff className="w-3 h-3" />
+                            <span>Close</span>
+                          </button>
+                        ) : (
+                          <span className="text-[11px] text-slate-500 font-mono">Blocked</span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
       {/* Metric Counters Grid */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <div className="p-3 rounded-xl bg-slate-900/80 border border-slate-800 flex items-center justify-between">
@@ -253,7 +501,7 @@ export const ProcessManagementPanel = ({ onScanComplete, compact = false, readOn
 
         <div className="p-3 rounded-xl bg-slate-900/80 border border-cyan-500/20 flex items-center justify-between">
           <div>
-            <p className="text-[11px] text-cyan-300 font-medium">Protected</p>
+            <p className="text-[11px] text-cyan-300 font-medium">Protected System</p>
             <p className="text-xl font-black text-cyan-400 font-mono">{summary.protectedCount}</p>
           </div>
           <Lock className="w-5 h-5 text-cyan-400" />
@@ -303,7 +551,7 @@ export const ProcessManagementPanel = ({ onScanComplete, compact = false, readOn
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search application or PID..."
+            placeholder="Search process by name, PID, or reason..."
             className="w-full bg-slate-900 border border-slate-800 rounded-xl pl-9 pr-8 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500"
           />
           {searchQuery && (
@@ -350,7 +598,7 @@ export const ProcessManagementPanel = ({ onScanComplete, compact = false, readOn
           </button>
           <button
             onClick={() => setActiveFilter('PROTECTED')}
-            className={`px-3 py-1.5 rounded-lg font-medium transition-all ${
+            className={`px-3 py-1.5 rounded-lg font-medium transition-all flex items-center gap-1 ${
               activeFilter === 'PROTECTED'
                 ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 shadow-sm'
                 : 'text-cyan-400/80 hover:text-cyan-300'
@@ -376,7 +624,7 @@ export const ProcessManagementPanel = ({ onScanComplete, compact = false, readOn
             <button
               onClick={promptCloseBulk}
               disabled={actionInProgress !== null}
-              className="px-3 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold shadow flex items-center gap-1.5 transition-all disabled:opacity-50"
+              className="px-3 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold shadow flex items-center gap-1.5 transition-all disabled:opacity-50"
             >
               <PowerOff className="w-3.5 h-3.5" />
               <span>Close Selected ({selectedPids.size})</span>
@@ -384,7 +632,7 @@ export const ProcessManagementPanel = ({ onScanComplete, compact = false, readOn
           )}
 
           <button
-            onClick={runScan}
+            onClick={() => runScan(true)}
             disabled={loading}
             title="Refresh running processes"
             className="p-2 rounded-xl bg-slate-900 border border-slate-800 text-slate-400 hover:text-cyan-400 hover:border-slate-700 transition-all disabled:opacity-50 flex items-center gap-1.5 text-xs font-semibold"
@@ -395,7 +643,7 @@ export const ProcessManagementPanel = ({ onScanComplete, compact = false, readOn
         </div>
       </div>
 
-      {/* Process Table Header */}
+      {/* Process Table Header & List */}
       <div className="border border-slate-800 rounded-xl overflow-hidden bg-slate-950/70">
         <div className="p-3 bg-slate-900/60 border-b border-slate-800 flex items-center justify-between text-xs text-slate-400 font-semibold">
           <div className="flex items-center gap-3">
@@ -437,7 +685,7 @@ export const ProcessManagementPanel = ({ onScanComplete, compact = false, readOn
                 <div
                   key={`${proc.pid}-${proc.name}`}
                   className={`p-3 flex items-center justify-between text-xs hover:bg-slate-900/40 transition-colors ${
-                    proc.isProhibited ? 'bg-rose-950/10' : ''
+                    proc.isProhibited ? 'bg-rose-950/15' : ''
                   }`}
                 >
                   {/* Left: Checkbox & Name/PID */}
@@ -465,6 +713,8 @@ export const ProcessManagementPanel = ({ onScanComplete, compact = false, readOn
                               ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
                               : proc.category === 'NORMAL_USER_APPLICATION'
                               ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                              : proc.category === 'DEVELOPMENT_TOOL'
+                              ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30'
                               : proc.category === 'WINDOWS_SYSTEM'
                               ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30'
                               : proc.category === 'VIGILEXAM_REQUIRED'
@@ -501,6 +751,8 @@ export const ProcessManagementPanel = ({ onScanComplete, compact = false, readOn
                             ? 'text-rose-400 font-semibold'
                             : proc.category === 'NORMAL_USER_APPLICATION'
                             ? 'text-amber-400/90'
+                            : proc.category === 'DEVELOPMENT_TOOL'
+                            ? 'text-blue-300 font-medium'
                             : 'text-slate-400'
                         }`}
                       >
@@ -559,7 +811,7 @@ export const ProcessManagementPanel = ({ onScanComplete, compact = false, readOn
 
             <div className="p-3 rounded-xl bg-slate-950 border border-slate-850 text-xs text-slate-300 space-y-2">
               <p>
-                Closing a running application safely terminates its active process. It does{' '}
+                Closing a running application terminates its active memory process. It does{' '}
                 <strong>NOT</strong> delete any files, program data, or software installations.
               </p>
 
@@ -570,6 +822,21 @@ export const ProcessManagementPanel = ({ onScanComplete, compact = false, readOn
                   </div>
                   <div className="text-slate-400 text-[11px]">
                     PID: {confirmModal.target.pid} ● {confirmModal.target.name}
+                  </div>
+                </div>
+              )}
+
+              {confirmModal.type === 'all_prohibited' && Array.isArray(confirmModal.target) && (
+                <div>
+                  <p className="text-rose-400 font-bold mb-1">
+                    All {confirmModal.target.length} prohibited application(s) will be closed:
+                  </p>
+                  <div className="max-h-28 overflow-y-auto space-y-1 font-mono text-[11px] text-rose-300">
+                    {confirmModal.target.map((t) => (
+                      <div key={t.pid} className="truncate">
+                        • {t.displayName || t.name} (PID {t.pid})
+                      </div>
+                    ))}
                   </div>
                 </div>
               )}
@@ -599,7 +866,7 @@ export const ProcessManagementPanel = ({ onScanComplete, compact = false, readOn
               </button>
               <button
                 onClick={executeConfirmedTermination}
-                className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-black transition-all shadow-lg shadow-amber-500/20"
+                className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-black transition-all shadow-lg shadow-rose-600/20"
               >
                 Confirm & Close Application
               </button>

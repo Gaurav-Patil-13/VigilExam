@@ -1,11 +1,11 @@
-import { app, BrowserWindow, ipcMain, screen, clipboard, Menu } from 'electron';
-import path from 'path';
-import { fileURLToPath } from 'url';
-import os from 'os';
-import { processMonitor } from './processMonitor.js';
-import { kioskManager } from './kioskManager.js';
-import { displayMonitor } from './displayMonitor.js';
-import { systemMonitor } from './systemMonitor.js';
+import { app, BrowserWindow, ipcMain, screen, clipboard, Menu } from "electron";
+import path from "path";
+import { fileURLToPath } from "url";
+import os from "os";
+import { processMonitor } from "./processMonitor.js";
+import { kioskManager } from "./kioskManager.js";
+import { displayMonitor } from "./displayMonitor.js";
+import { systemMonitor } from "./systemMonitor.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -22,7 +22,7 @@ const DEFAULT_CLIPBOARD_POLICY = {
   block_drag_drop: true,
   clear_clipboard_on_exam_start: true,
   clear_clipboard_on_exam_end: true,
-  log_attempts: true
+  log_attempts: true,
 };
 
 let currentClipboardPolicy = { ...DEFAULT_CLIPBOARD_POLICY };
@@ -35,14 +35,19 @@ async function ensureEmbeddedServer() {
     if (!serverReadyPromise) {
       serverReadyPromise = (async () => {
         try {
-          process.env.PORT = '4000';
-          const srv = await import('../server/index.js');
+          process.env.PORT = "4000";
+          const srv = await import("../server/index.js");
           if (srv.startServer) {
             await srv.startServer(4000);
           }
-          console.info('[ElectronLifecycle] Embedded Express & Socket.io server ready on port 4000');
+          console.info(
+            "[ElectronLifecycle] Embedded Express & Socket.io server ready on port 4000",
+          );
         } catch (err) {
-          console.warn('[ElectronLifecycle] Embedded server start warning:', err.message);
+          console.warn(
+            "[ElectronLifecycle] Embedded server start warning:",
+            err.message,
+          );
         }
       })();
     }
@@ -58,14 +63,14 @@ function setExamClipboardSecurity(options) {
   let active = false;
   let policy = { ...DEFAULT_CLIPBOARD_POLICY };
 
-  if (typeof options === 'boolean') {
+  if (typeof options === "boolean") {
     active = options;
-  } else if (options && typeof options === 'object') {
+  } else if (options && typeof options === "object") {
     active = Boolean(options.active);
     if (options.policy) {
       policy = {
         ...DEFAULT_CLIPBOARD_POLICY,
-        ...options.policy
+        ...options.policy,
       };
     }
   }
@@ -81,12 +86,12 @@ function setExamClipboardSecurity(options) {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.setMenu(null);
       Menu.setApplicationMenu(null);
-      mainWindow.webContents.send('exam-clipboard-security-state', {
+      mainWindow.webContents.send("exam-clipboard-security-state", {
         active: true,
-        policy: currentClipboardPolicy
+        policy: currentClipboardPolicy,
       });
     }
-    console.info('[ClipboardSecurity] Activated with strict policy');
+    console.info("[ClipboardSecurity] Activated with strict policy");
   } else {
     examClipboardSecurityActive = false;
     if (policy.clear_clipboard_on_exam_end) {
@@ -96,15 +101,18 @@ function setExamClipboardSecurity(options) {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.setMenu(defaultAppMenu);
       Menu.setApplicationMenu(defaultAppMenu);
-      mainWindow.webContents.send('exam-clipboard-security-state', {
+      mainWindow.webContents.send("exam-clipboard-security-state", {
         active: false,
-        policy: currentClipboardPolicy
+        policy: currentClipboardPolicy,
       });
     }
-    console.info('[ClipboardSecurity] Deactivated; normal menu restored');
+    console.info("[ClipboardSecurity] Deactivated; normal menu restored");
   }
 
-  return { active: examClipboardSecurityActive, policy: currentClipboardPolicy };
+  return {
+    active: examClipboardSecurityActive,
+    policy: currentClipboardPolicy,
+  };
 }
 
 // --------------------------------------------------
@@ -119,17 +127,17 @@ function createWindow() {
     height: 768,
     minWidth: 1024,
     minHeight: 700,
-    title: 'VigilExam - Secure Online Examination & Proctoring System',
+    title: "VigilExam - Secure Online Examination & Proctoring System",
     autoHideMenuBar: true,
-    backgroundColor: '#080C14',
+    backgroundColor: "#080C14",
 
     webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
+      preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
       nodeIntegration: false,
       webSecurity: true,
-      devTools: !app.isPackaged
-    }
+      devTools: !app.isPackaged,
+    },
   });
 
   // Register main window with managers
@@ -143,32 +151,32 @@ function createWindow() {
   // Forward process watcher violations directly to renderer
   processMonitor.eventListeners.add((event) => {
     if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('process-violation-event', event);
+      mainWindow.webContents.send("process-violation-event", event);
     }
   });
 
-  console.info('[ElectronLifecycle] BrowserWindow created', {
+  console.info("[ElectronLifecycle] BrowserWindow created", {
     pid: process.pid,
-    packaged: app.isPackaged
+    packaged: app.isPackaged,
   });
 
   // Packaged EXE
   if (app.isPackaged) {
-    const indexPath = path.join(app.getAppPath(), 'dist', 'index.html');
-    console.log('Loading production UI:', indexPath);
+    const indexPath = path.join(app.getAppPath(), "dist", "index.html");
+    console.log("Loading production UI:", indexPath);
     mainWindow.loadFile(indexPath).catch((error) => {
-      console.error('Failed to load production UI:', error);
+      console.error("Failed to load production UI:", error);
     });
   } else {
     // Development
-    const devUrl = 'http://localhost:5173';
-    console.log('Loading development UI:', devUrl);
+    const devUrl = "http://localhost:5173";
+    console.log("Loading development UI:", devUrl);
     mainWindow.loadURL(devUrl).catch((error) => {
-      console.error('Failed to load Vite:', error);
+      console.error("Failed to load Vite:", error);
     });
   }
 
-  mainWindow.on('closed', () => {
+  mainWindow.on("closed", () => {
     mainWindow = null;
     processMonitor.stopProcessMonitoring();
   });
@@ -179,66 +187,70 @@ function createWindow() {
 // --------------------------------------------------
 
 // Process Audit & Monitoring
-ipcMain.handle('audit-processes', async () => {
+ipcMain.handle("audit-processes", async () => {
   return await processMonitor.scanProcesses();
 });
 
-ipcMain.handle('get-suspicious-processes', async () => {
+ipcMain.handle("get-suspicious-processes", async () => {
   return await processMonitor.getSuspiciousProcesses();
 });
 
-ipcMain.handle('capture-process-baseline', async () => {
+ipcMain.handle("capture-process-baseline", async () => {
   return await processMonitor.captureBaseline();
 });
 
-ipcMain.handle('start-process-monitoring', async (_event, intervalMs) => {
+ipcMain.handle("start-process-monitoring", async (_event, intervalMs) => {
   processMonitor.startProcessMonitoring(intervalMs || 1500);
   return { success: true };
 });
 
-ipcMain.handle('stop-process-monitoring', async () => {
+ipcMain.handle("stop-process-monitoring", async () => {
   processMonitor.stopProcessMonitoring();
   return { success: true };
 });
 
-ipcMain.handle('terminate-approved-process', async (_event, pid, name) => {
+ipcMain.handle("terminate-approved-process", async (_event, pid, name) => {
   return await processMonitor.terminateApprovedProcess(pid, name);
 });
 
-ipcMain.handle('close-non-essential-apps', async () => {
+ipcMain.handle("close-non-essential-apps", async () => {
   return await processMonitor.closeNonEssentialApplications();
 });
 
+ipcMain.handle("close-all-prohibited-apps", async () => {
+  return await processMonitor.closeAllProhibitedApplications();
+});
+
 // Display APIs
-ipcMain.handle('get-display-info', async () => {
+ipcMain.handle("get-display-info", async () => {
   return displayMonitor.getDisplays();
 });
 
 // Kiosk Lockdown APIs
-ipcMain.handle('enable-kiosk-mode', async () => {
+ipcMain.handle("enable-kiosk-mode", async () => {
   return kioskManager.enableKioskLockdown();
 });
 
-ipcMain.handle('disable-kiosk-mode', async () => {
+ipcMain.handle("disable-kiosk-mode", async () => {
   return kioskManager.disableKioskLockdown();
 });
 
-ipcMain.handle('get-kiosk-state', async () => {
+ipcMain.handle("get-kiosk-state", async () => {
   return kioskManager.getKioskState();
 });
 
 // System Diagnostics
-ipcMain.handle('get-system-diagnostics', async () => {
+ipcMain.handle("get-system-diagnostics", async () => {
   return systemMonitor.getDiagnostics();
 });
 
 // Clipboard Security
-ipcMain.handle('set-exam-clipboard-security', async (_event, options) => {
+ipcMain.handle("set-exam-clipboard-security", async (_event, options) => {
   return setExamClipboardSecurity(options);
 });
 
 // App Environment Sync
-ipcMain.on('is-packaged-sync', (event) => {
+ipcMain.on("is-packaged-sync", (event) => {
   event.returnValue = app.isPackaged;
 });
 
@@ -250,16 +262,16 @@ app.whenReady().then(async () => {
   await ensureEmbeddedServer();
   createWindow();
 
-  app.on('activate', () => {
+  app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       createWindow();
     }
   });
 });
 
-app.on('window-all-closed', () => {
+app.on("window-all-closed", () => {
   processMonitor.stopProcessMonitoring();
-  if (process.platform !== 'darwin') {
+  if (process.platform !== "darwin") {
     app.quit();
   }
 });

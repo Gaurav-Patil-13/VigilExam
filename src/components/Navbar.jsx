@@ -13,8 +13,12 @@ export const Navbar = ({ currentView, setCurrentView }) => {
       <div className="max-w-7xl mx-auto flex items-center justify-between">
         {/* Brand Logo */}
         <div
-          className="flex items-center gap-3 cursor-pointer"
-          onClick={() => setCurrentView && setCurrentView('dashboard')}
+          className={`flex items-center gap-3 ${currentView === 'exam' ? 'cursor-default' : 'cursor-pointer'}`}
+          onClick={() => {
+            if (currentView !== 'exam' && setCurrentView) {
+              setCurrentView('dashboard');
+            }
+          }}
         >
           <div className="relative">
             <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-indigo-600 to-cyan-500 flex items-center justify-center shadow-lg shadow-indigo-500/20">

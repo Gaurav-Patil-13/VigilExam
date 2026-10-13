@@ -27,6 +27,15 @@ class FaceMonitor {
     this.noFaceStartTime = null;
     this.stableOneFaceDuration = 0;
     this.lastDetectionTimestamp = 0;
+    this.lastVideoTimestamp = 0;
+    this.isProcessingFrame = false;
+
+    // Real-time continuous elapsed calibration parameters
+    this.calibrationStartTime = null;
+    this.lastValidFaceTime = 0;
+    this.isCalibrated = false;
+    this.targetCalibrationMs = 2000; // 2 continuous seconds required
+    this.gracePeriodMs = 600;        // 600ms transient jitter tolerance (blinks, frame dips)
   }
 
   /**
@@ -47,17 +56,17 @@ class FaceMonitor {
             delegate: 'GPU'
           },
           runningMode: 'VIDEO',
-          minDetectionConfidence: 0.5
+          minDetectionConfidence: 0.4
         });
       } catch (gpuErr) {
-        console.warn('[FaceMonitor] GPU delegate failed, falling back to CPU:', gpuErr.message);
+        console.warn('[FaceMonitor] GPU delegate fallback to CPU:', gpuErr.message);
         this.detector = await FaceDetector.createFromOptions(vision, {
           baseOptions: {
             modelAssetPath: '/models/blaze_face_short_range.tflite',
             delegate: 'CPU'
           },
           runningMode: 'VIDEO',
-          minDetectionConfidence: 0.5
+          minDetectionConfidence: 0.4
         });
       }
 
@@ -76,10 +85,16 @@ class FaceMonitor {
     this.videoElement = videoElement;
 
     try {
-      this.stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 24 } },
-        audio: true
-      });
+      try {
+        this.stream = await navigator.mediaDevices.getUserMedia({
+          video: { width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 24 } },
+          audio: true
+        });
+      } catch (mediaErr) {
+        this.stream = await navigator.mediaDevices.getUserMedia({
+          video: { width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 24 } }
+        });
+      }
 
       const videoTrack = this.stream.getVideoTracks()[0];
       const audioTrack = this.stream.getAudioTracks()[0];
@@ -101,6 +116,7 @@ class FaceMonitor {
       }
 
       this.cameraConnected = true;
+      this.resetCalibration('Camera initialized');
 
       // Track disconnection handlers
       videoTrack.onended = () => {
@@ -127,26 +143,39 @@ class FaceMonitor {
   handleCameraDisconnect(reason) {
     this.cameraConnected = false;
     this.currentFaceCount = 0;
+    this.resetCalibration(`Camera disconnected: ${reason}`);
     this.emitEvent({
       type: 'CAMERA_DISCONNECTED',
+      faceCount: 0,
+      calibrated: false,
+      stableSeconds: 0,
       message: `Camera disconnected: ${reason}`,
       severity: 'critical',
       timestamp: new Date().toISOString()
     });
   }
 
+  resetCalibration(reason = 'Reset') {
+    if (this.calibrationStartTime || this.isCalibrated) {
+      console.info(`[FaceMonitor] Calibration reset. Reason: ${reason}`);
+    }
+    this.calibrationStartTime = null;
+    this.lastValidFaceTime = 0;
+    this.isCalibrated = false;
+    this.stableOneFaceDuration = 0;
+  }
+
   /**
-   * Starts continuous detection loop.
+   * Starts continuous detection loop with intervalMs (default 150ms).
    */
-  startMonitoring(intervalMs = 300, onEventCallback) {
-    if (this.isDetecting) return;
-    this.isDetecting = true;
+  startMonitoring(intervalMs = 150, onEventCallback) {
     if (onEventCallback) {
       this.listeners.add(onEventCallback);
     }
 
-    this.noFaceStartTime = null;
-    this.stableOneFaceDuration = 0;
+    if (this.isDetecting) return;
+    this.isDetecting = true;
+    this.resetCalibration('Monitoring started');
 
     this.loopTimer = setInterval(async () => {
       await this.processFrame();
@@ -159,6 +188,9 @@ class FaceMonitor {
       clearInterval(this.loopTimer);
       this.loopTimer = null;
     }
+    this.isProcessingFrame = false;
+    this.listeners.clear();
+    this.resetCalibration('Monitoring stopped');
   }
 
   stopCamera() {
@@ -171,6 +203,7 @@ class FaceMonitor {
       this.videoElement.srcObject = null;
     }
     this.cameraConnected = false;
+    this.lastState = 'INIT';
   }
 
   /**
@@ -181,83 +214,158 @@ class FaceMonitor {
       return;
     }
 
-    if (this.videoElement.readyState < 2 || this.videoElement.videoWidth === 0) {
+    // Ensure valid video dimensions and ready state
+    if (
+      this.videoElement.readyState < 2 ||
+      this.videoElement.videoWidth === 0 ||
+      this.videoElement.videoHeight === 0
+    ) {
       return;
     }
 
+    // Concurrency guard to prevent overlapping detections
+    if (this.isProcessingFrame) {
+      return;
+    }
+    this.isProcessingFrame = true;
+
     try {
-      const now = performance.now();
-      const result = this.detector.detectForVideo(this.videoElement, now);
+      // Ensure monotonically increasing timestamp for MediaPipe
+      const perfNow = performance.now();
+      const videoTimestamp = Math.max(perfNow, (this.lastVideoTimestamp || 0) + 1);
+      this.lastVideoTimestamp = videoTimestamp;
+
+      const result = this.detector.detectForVideo(this.videoElement, videoTimestamp);
       const faces = result?.detections || [];
       const faceCount = faces.length;
       this.currentFaceCount = faceCount;
+      const nowMs = Date.now();
+      const confidence = faces[0]?.categories?.[0]?.score || (faceCount === 1 ? 0.85 : 0);
 
       if (faceCount === 1) {
-        // EXACTLY ONE FACE (Normal State)
+        // EXACTLY ONE FACE DETECTED
         this.noFaceStartTime = null;
-        this.stableOneFaceDuration += 300;
+        this.lastValidFaceTime = nowMs;
 
+        // Start calibration timer if not already active
+        if (!this.calibrationStartTime) {
+          this.calibrationStartTime = nowMs;
+          console.info('[FaceMonitor] Single face detected; calibration timer started (0/2s)');
+        }
+
+        const elapsedMs = nowMs - this.calibrationStartTime;
+        this.stableOneFaceDuration = elapsedMs;
+        const stableSeconds = Math.min(2, Math.floor(elapsedMs / 1000));
+
+        if (elapsedMs >= this.targetCalibrationMs && !this.isCalibrated) {
+          this.isCalibrated = true;
+          console.info('[FaceMonitor] Single face presence calibrated successfully (2/2s)');
+        }
+
+        const progressPayload = {
+          type: 'CALIBRATION_PROGRESS',
+          faceCount: 1,
+          calibrated: this.isCalibrated,
+          stableSeconds: this.isCalibrated ? 2 : stableSeconds,
+          elapsedMs,
+          confidence,
+          isJitterGrace: false,
+          message: this.isCalibrated ? 'Single candidate face confirmed (2/2s)' : `Calibrating facial presence (${stableSeconds}/2s)`,
+          timestamp: new Date().toISOString()
+        };
+
+        // Emit progress on every single frame/tick
+        this.emitEvent(progressPayload);
+
+        // Also emit discrete state transition event for backwards compatibility
         if (this.lastState !== 'ONE_FACE') {
           this.lastState = 'ONE_FACE';
           this.emitEvent({
+            ...progressPayload,
             type: 'ONE_FACE',
-            faceCount: 1,
-            message: 'Single candidate face confirmed present',
-            severity: 'info',
-            timestamp: new Date().toISOString()
+            severity: 'info'
           });
         }
       } else if (faceCount === 0) {
         // NO FACE DETECTED
-        this.stableOneFaceDuration = 0;
-        const nowMs = Date.now();
-        if (!this.noFaceStartTime) {
-          this.noFaceStartTime = nowMs;
-        }
+        const timeSinceValidFace = nowMs - this.lastValidFaceTime;
 
-        const absentSeconds = Math.round((nowMs - this.noFaceStartTime) / 1000);
+        // Check if within transient jitter tolerance window (e.g. 600ms grace period)
+        if (this.calibrationStartTime && timeSinceValidFace <= this.gracePeriodMs) {
+          const currentElapsedMs = Math.max(0, this.lastValidFaceTime - this.calibrationStartTime);
+          const stableSeconds = Math.min(2, Math.floor(currentElapsedMs / 1000));
 
-        if (this.lastState !== 'NO_FACE') {
-          this.lastState = 'NO_FACE';
-        }
-
-        // Graduated escalation based on absence duration
-        let severity = 'low';
-        if (absentSeconds > 10) severity = 'high';
-        else if (absentSeconds > 4) severity = 'medium';
-
-        // Throttle emission to once every 2 seconds
-        if (nowMs - this.lastDetectionTimestamp > 2000) {
-          this.lastDetectionTimestamp = nowMs;
           this.emitEvent({
+            type: 'CALIBRATION_PROGRESS',
+            faceCount: 0,
+            calibrated: this.isCalibrated,
+            stableSeconds: this.isCalibrated ? 2 : stableSeconds,
+            elapsedMs: currentElapsedMs,
+            confidence: 0,
+            isJitterGrace: true,
+            message: 'Holding calibration during transient frame jitter',
+            timestamp: new Date().toISOString()
+          });
+        } else {
+          // Genuinely absent beyond grace period
+          if (this.calibrationStartTime || this.isCalibrated) {
+            this.resetCalibration(`Face genuinely absent for ${timeSinceValidFace}ms`);
+          }
+
+          if (!this.noFaceStartTime) {
+            this.noFaceStartTime = nowMs;
+          }
+          const absentSeconds = Math.round((nowMs - this.noFaceStartTime) / 1000);
+
+          if (this.lastState !== 'NO_FACE') {
+            this.lastState = 'NO_FACE';
+          }
+
+          let severity = 'low';
+          if (absentSeconds > 10) severity = 'high';
+          else if (absentSeconds > 4) severity = 'medium';
+
+          const noFacePayload = {
             type: 'FACE_NOT_DETECTED',
             faceCount: 0,
+            calibrated: false,
+            stableSeconds: 0,
             absentSeconds,
+            isJitterGrace: false,
             message: `Candidate face not detected (${absentSeconds}s absent)`,
             severity,
             timestamp: new Date().toISOString()
+          };
+
+          this.emitEvent(noFacePayload);
+
+          // Emit NO_FACE event for ExamKiosk compatibility
+          this.emitEvent({
+            ...noFacePayload,
+            type: 'NO_FACE'
           });
         }
       } else {
-        // MULTIPLE FACES DETECTED (>= 2)
-        this.stableOneFaceDuration = 0;
+        // MULTIPLE FACES DETECTED (>= 2) - Immediate reset (no grace period)
+        this.resetCalibration(`Multiple faces detected in camera frame (${faceCount})`);
         this.noFaceStartTime = null;
         this.lastState = 'MULTIPLE_FACES';
 
-        const nowMs = Date.now();
-        if (nowMs - this.lastDetectionTimestamp > 2000) {
-          this.lastDetectionTimestamp = nowMs;
-          this.emitEvent({
-            type: 'MULTIPLE_FACES_DETECTED',
-            faceCount,
-            message: `Multiple faces detected in camera frame (${faceCount} faces)`,
-            severity: 'critical',
-            timestamp: new Date().toISOString()
-          });
-        }
+        this.emitEvent({
+          type: 'MULTIPLE_FACES_DETECTED',
+          faceCount,
+          calibrated: false,
+          stableSeconds: 0,
+          isJitterGrace: false,
+          message: `Multiple faces detected in camera frame (${faceCount} faces)`,
+          severity: 'critical',
+          timestamp: new Date().toISOString()
+        });
       }
     } catch (err) {
       console.warn('[FaceMonitor] Frame processing error:', err.message);
+    } finally {
+      this.isProcessingFrame = false;
     }
   }
 

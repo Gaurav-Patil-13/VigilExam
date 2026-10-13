@@ -49,7 +49,7 @@ const MainApp = () => {
     setStudentState('precheck');
   };
 
-  const handleProceedToExam = async () => {
+  const handleProceedToExam = async (clearance = {}) => {
     console.info('[ExamFlow] Start requested', {
       examId: selectedTest?.id ?? null,
       studentId: user?.id ?? null,
@@ -66,7 +66,11 @@ const MainApp = () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           test_id: selectedTest.id,
-          student_id: user.id
+          student_id: user.id,
+          clearance: {
+            prohibitedCount: clearance.prohibitedCount || 0,
+            isProcessPassed: clearance.isProcessPassed !== false
+          }
         })
       });
       const attemptData = await res.json();
@@ -87,6 +91,7 @@ const MainApp = () => {
       setStudentState('exam');
     } catch (e) {
       console.error('[ExamFlow] Failed to start exam attempt; remaining on pre-check', e);
+      throw e;
     }
   };
 

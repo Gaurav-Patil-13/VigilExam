@@ -192,7 +192,14 @@ export const ExamKiosk = ({ test, attempt, onExamFinished }) => {
         setUnauthorizedAppDetected(proc);
         logViolation(
           'PROHIBITED_PROCESS_DETECTED',
-          { name: proc.name, pid: proc.pid, category: proc.subCategory },
+          {
+            name: proc.name,
+            displayName: proc.displayName || proc.name,
+            pid: proc.pid,
+            category: proc.subCategory || proc.category,
+            detection_timestamp: event.timestamp || new Date().toISOString(),
+            severity: proc.severity || 'critical'
+          },
           'critical'
         );
         updateKioskSecurityStatus('COMPROMISED');
@@ -299,14 +306,23 @@ export const ExamKiosk = ({ test, attempt, onExamFinished }) => {
 
   // Safe Close of Unauthorized Process from in-exam warning banner
   const handleCloseUnauthorizedApp = async (pid, name) => {
+    let result = null;
     if (window.vigilNative?.terminateApprovedProcess) {
-      await window.vigilNative.terminateApprovedProcess(pid, name);
-      setUnauthorizedAppDetected(null);
-      updateKioskSecurityStatus('SECURE');
+      result = await window.vigilNative.terminateApprovedProcess(pid, name);
     } else if (window.vigilNative?.closeApplication) {
-      await window.vigilNative.closeApplication(pid, name);
+      result = await window.vigilNative.closeApplication(pid, name);
+    }
+    
+    // Only dismiss alert if termination succeeded or process is verified closed
+    if (result && result.success) {
       setUnauthorizedAppDetected(null);
       updateKioskSecurityStatus('SECURE');
+    } else if (window.vigilNative?.getSuspiciousProcesses) {
+      const check = await window.vigilNative.getSuspiciousProcesses();
+      if (check && check.isClean) {
+        setUnauthorizedAppDetected(null);
+        updateKioskSecurityStatus('SECURE');
+      }
     }
   };
 
