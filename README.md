@@ -345,4 +345,4 @@ This command:
   - **Ritesh Jagtap** — Frontend Architecture, AI Computer Vision & Portal Interfaces
   - **Rugved Ganapule** — Electron Desktop Shell, Native OS Process Guard & Kiosk Lockdown
 
-Thank You
+Thank You all
