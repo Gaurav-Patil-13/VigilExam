@@ -344,3 +344,5 @@ This command:
   - **Amit Rane** — Assessment Engine, External Platform Integrations & Automated Testing
   - **Ritesh Jagtap** — Frontend Architecture, AI Computer Vision & Portal Interfaces
   - **Rugved Ganapule** — Electron Desktop Shell, Native OS Process Guard & Kiosk Lockdown
+
+Thank You
