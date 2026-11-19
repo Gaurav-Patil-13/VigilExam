@@ -26,6 +26,11 @@ const examAttemptSchema = new mongoose.Schema(
     violation_count: { type: Number, default: 0 },
     answers: { type: mongoose.Schema.Types.Mixed, default: {} },
     score: { type: Number, default: 0 },
+    total_marks: { type: Number, default: 100 },
+    percentage: { type: Number, default: 0 },
+    correct_count: { type: Number, default: 0 },
+    total_questions: { type: Number, default: 0 },
+    question_results: { type: mongoose.Schema.Types.Mixed, default: [] },
     kiosk_token: { type: String, default: '' }
   },
   {

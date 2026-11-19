@@ -484,22 +484,34 @@ app.get('/api/tests', (req, res) => {
   res.json(db.getTests());
 });
 
-app.get('/api/tests/student/:studentId', (req, res) => {
-  const tests = db.getAssignmentsByStudent(req.params.studentId);
-  if (tests.length === 0) {
-    return res.json(db.getTests().filter(t => t.is_active));
+app.get('/api/tests/student/:studentId', async (req, res) => {
+  // Return all active examinations so candidates immediately see any newly authored custom exams
+  let allActive = db.getTests().filter((t) => t.is_active);
+  if (isMongoConnected()) {
+    try {
+      const mongoTests = await Exam.find({ is_active: true }).lean();
+      if (mongoTests && mongoTests.length > 0) {
+        allActive = mongoTests;
+      }
+    } catch (e) {}
   }
-  res.json(tests);
+  res.json(allActive);
 });
 
-app.get('/api/tests/:id', (req, res) => {
-  const test = db.getTestById(req.params.id);
+app.get('/api/tests/:id', async (req, res) => {
+  let test = db.getTestById(req.params.id);
+  if ((!test || !test.questions || test.questions.length === 0) && isMongoConnected()) {
+    try {
+      const mongoTest = await Exam.findOne({ id: req.params.id }).lean();
+      if (mongoTest) test = mongoTest;
+    } catch (e) {}
+  }
   if (!test) return res.status(404).json({ error: 'Test not found' });
   res.json(test);
 });
 
 // Create Test (Admin)
-app.post('/api/tests', (req, res) => {
+app.post('/api/tests', async (req, res) => {
   const { title, description, duration_minutes, total_marks, external_link, security_policy, questions, created_by } = req.body;
 
   const resolvedSecurityPolicy = {
@@ -525,28 +537,144 @@ app.post('/api/tests', (req, res) => {
     }
   };
 
+  // Process & validate any manually submitted questions
+  const formattedQuestions = Array.isArray(questions)
+    ? questions
+        .map((q, idx) => {
+          const cleanOptions = Array.isArray(q.options)
+            ? q.options.map((o) => String(o).trim()).filter(Boolean)
+            : [];
+          return {
+            id: q.id || `q-${Date.now()}-${idx + 1}`,
+            type: q.type || 'mcq',
+            question: String(q.question || '').trim(),
+            options: cleanOptions,
+            correct_answer: String(q.correct_answer || '').trim(),
+            points: Number(q.points) || 20,
+            code_template: q.code_template || ''
+          };
+        })
+        .filter((q) => q.question && q.options.length >= 2 && q.correct_answer)
+    : [];
+
+  const calculatedTotalMarks = formattedQuestions.length > 0
+    ? formattedQuestions.reduce((sum, q) => sum + (Number(q.points) || 20), 0)
+    : (Number(total_marks) || 100);
+
   const newTest = {
     id: `test-${Date.now()}`,
     title: title || 'New Examination',
     description: description || '',
     duration_minutes: Number(duration_minutes) || 30,
-    total_marks: Number(total_marks) || 100,
+    total_marks: calculatedTotalMarks,
     external_link: external_link || '',
     is_active: true,
     created_by: created_by || 'u-admin-1',
     created_at: new Date().toISOString(),
     security_policy: resolvedSecurityPolicy,
-    questions: questions || []
+    questions: formattedQuestions
   };
 
-  const created = db.createTest(newTest);
-  res.status(201).json(created);
+  try {
+    const created = await db.createTest(newTest);
+    res.status(201).json(created);
+  } catch (err) {
+    console.error('[Server] Error creating test:', err);
+    res.status(500).json({ error: 'Failed to create test: ' + err.message });
+  }
+});
+
+// Add Question to Existing Test (Admin)
+app.post('/api/tests/:id/questions', async (req, res) => {
+  const { question, options, correct_answer, points, type } = req.body;
+
+  if (!question || !String(question).trim()) {
+    return res.status(400).json({ error: 'Question text is required.' });
+  }
+
+  if (!Array.isArray(options) || options.length < 2) {
+    return res.status(400).json({ error: 'At least 2 options are required for an MCQ question.' });
+  }
+
+  const cleanOptions = options.map((opt) => String(opt).trim()).filter(Boolean);
+  if (cleanOptions.length < 2) {
+    return res.status(400).json({ error: 'At least 2 non-empty options are required.' });
+  }
+
+  const cleanCorrectAnswer = String(correct_answer || '').trim();
+  if (!cleanCorrectAnswer || !cleanOptions.includes(cleanCorrectAnswer)) {
+    return res.status(400).json({ error: 'A valid correct answer matching one of the options must be selected.' });
+  }
+
+  try {
+    const result = await db.addQuestionToTest(req.params.id, {
+      question: String(question).trim(),
+      options: cleanOptions,
+      correct_answer: cleanCorrectAnswer,
+      points: Number(points) || 20,
+      type: type || 'mcq'
+    });
+
+    if (!result) {
+      return res.status(404).json({ error: 'Exam profile not found.' });
+    }
+
+    res.status(201).json({
+      success: true,
+      message: 'MCQ question added successfully.',
+      question: result.question,
+      test: result.test
+    });
+  } catch (err) {
+    console.error('[Server] Error adding question to exam:', err);
+    res.status(500).json({ error: 'Failed to add question: ' + err.message });
+  }
+});
+
+// Delete Question from Existing Test (Admin)
+app.delete('/api/tests/:id/questions/:questionId', async (req, res) => {
+  try {
+    const updatedTest = await db.deleteQuestionFromTest(req.params.id, req.params.questionId);
+    if (!updatedTest) {
+      return res.status(404).json({ error: 'Exam or Question not found.' });
+    }
+
+    res.json({
+      success: true,
+      message: 'Question removed successfully.',
+      test: updatedTest
+    });
+  } catch (err) {
+    console.error('[Server] Error deleting question:', err);
+    res.status(500).json({ error: 'Failed to delete question: ' + err.message });
+  }
+});
+
+// Delete Entire Test (Admin)
+app.delete('/api/tests/:id', async (req, res) => {
+  try {
+    const success = await db.deleteTest(req.params.id);
+    if (!success) {
+      return res.status(404).json({ error: 'Exam not found.' });
+    }
+
+    res.json({ success: true, message: 'Examination profile deleted successfully.' });
+  } catch (err) {
+    console.error('[Server] Error deleting test:', err);
+    res.status(500).json({ error: 'Failed to delete exam: ' + err.message });
+  }
 });
 
 // Start Exam Attempt
-app.post('/api/attempts/start', (req, res) => {
+app.post('/api/attempts/start', async (req, res) => {
   const { test_id, student_id, clearance } = req.body;
-  const test = db.getTestById(test_id);
+  let test = db.getTestById(test_id);
+  if ((!test || !test.questions || test.questions.length === 0) && isMongoConnected()) {
+    try {
+      const mongoTest = await Exam.findOne({ id: test_id }).lean();
+      if (mongoTest) test = mongoTest;
+    } catch (e) {}
+  }
   const student = db.getUserById(student_id);
 
   if (!test || !student) {
@@ -573,10 +701,12 @@ app.post('/api/attempts/start', (req, res) => {
     violation_count: 0,
     answers: {},
     score: 0,
+    total_marks: test.total_marks || 100,
+    total_questions: test.questions?.length || 0,
     kiosk_token: `ktk-${Math.random().toString(36).substring(2, 10)}`
   };
 
-  db.createAttempt(attempt);
+  await db.createAttempt(attempt);
 
   // Notify proctors via Socket.io
   io.to('proctor:live').emit('student_started_exam', attempt);
@@ -600,35 +730,84 @@ app.post('/api/attempts/:id/kiosk-status', (req, res) => {
   res.json(updated);
 });
 
-// Submit Exam Attempt
-app.post('/api/attempts/submit', (req, res) => {
+// Submit Exam Attempt - Real Marks Calculation & Detailed Breakdown
+app.post('/api/attempts/submit', async (req, res) => {
   const { attempt_id, answers } = req.body;
-  const attempt = db.getAttemptById(attempt_id);
+  let attempt = db.getAttemptById(attempt_id);
+  if (!attempt && isMongoConnected()) {
+    try {
+      attempt = await ExamAttempt.findOne({ id: attempt_id }).lean();
+    } catch (e) {}
+  }
   if (!attempt) return res.status(404).json({ error: 'Attempt not found' });
 
-  const test = db.getTestById(attempt.test_id);
-  let totalScore = 0;
-
-  // Auto-grade MCQs if questions exist
-  if (test && test.questions && test.questions.length > 0) {
-    test.questions.forEach((q) => {
-      if (q.type === 'mcq' && answers && answers[q.id] === q.correct_answer) {
-        totalScore += q.points || 20;
-      } else if (q.type === 'coding' && answers && answers[q.id] && answers[q.id].length > 10) {
-        totalScore += q.points || 40;
-      }
-    });
-  } else {
-    totalScore = 85;
+  let test = db.getTestById(attempt.test_id);
+  if ((!test || !test.questions || test.questions.length === 0) && isMongoConnected()) {
+    try {
+      const mongoTest = await Exam.findOne({ id: attempt.test_id }).lean();
+      if (mongoTest) test = mongoTest;
+    } catch (e) {}
   }
 
-  const updated = db.updateAttempt(attempt_id, {
+  let totalScore = 0;
+  let totalPossibleMarks = 0;
+  let correctCount = 0;
+  const questionResults = [];
+
+  // Accurate real-time grading of all questions
+  if (test && Array.isArray(test.questions) && test.questions.length > 0) {
+    test.questions.forEach((q) => {
+      const qPoints = Number(q.points) > 0 ? Number(q.points) : 20;
+      totalPossibleMarks += qPoints;
+
+      const studentAns = answers ? answers[q.id] : undefined;
+      let isCorrect = false;
+
+      if (q.type === 'mcq') {
+        const cleanStudentAns = studentAns !== undefined && studentAns !== null ? String(studentAns).trim() : '';
+        const cleanCorrectAns = q.correct_answer !== undefined && q.correct_answer !== null ? String(q.correct_answer).trim() : '';
+        isCorrect = cleanStudentAns !== '' && cleanStudentAns.toLowerCase() === cleanCorrectAns.toLowerCase();
+      } else if (q.type === 'coding') {
+        isCorrect = Boolean(studentAns && String(studentAns).trim().length > 10);
+      }
+
+      const earnedPoints = isCorrect ? qPoints : 0;
+      if (isCorrect) correctCount++;
+      totalScore += earnedPoints;
+
+      questionResults.push({
+        id: q.id,
+        question: q.question,
+        type: q.type || 'mcq',
+        options: q.options || [],
+        student_answer: studentAns ?? null,
+        correct_answer: q.correct_answer ?? null,
+        is_correct: isCorrect,
+        points: qPoints,
+        earned_points: earnedPoints
+      });
+    });
+  } else {
+    // Zero score when exam has no questions configured
+    totalPossibleMarks = Number(test?.total_marks) || 0;
+    totalScore = 0;
+  }
+
+  const finalTotalMarks = totalPossibleMarks > 0 ? totalPossibleMarks : (Number(test?.total_marks) || 100);
+  const percentage = finalTotalMarks > 0 ? Math.round((totalScore / finalTotalMarks) * 100) : 0;
+
+  const updated = await db.updateAttempt(attempt_id, {
     status: 'completed',
     kiosk_status: 'EXITED',
     ended_at: new Date().toISOString(),
     ended_reason: 'Student submitted examination',
     answers: answers || {},
-    score: totalScore
+    score: totalScore,
+    total_marks: finalTotalMarks,
+    correct_count: correctCount,
+    total_questions: test?.questions?.length || 0,
+    percentage: percentage,
+    question_results: questionResults
   });
 
   io.to('proctor:live').emit('student_submitted_exam', updated);

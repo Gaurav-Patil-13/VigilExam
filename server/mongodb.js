@@ -84,8 +84,9 @@ export async function connectMongoDB() {
     // Set strict connection options
     await mongoose.connect(effectiveUri, {
       dbName: DB_NAME,
-      serverSelectionTimeoutMS: 8000,
-      connectTimeoutMS: 10000
+      serverSelectionTimeoutMS: 15000,
+      connectTimeoutMS: 15000,
+      family: 4
     });
 
     const host = mongoose.connection.host || 'cluster0.tcfl6zh.mongodb.net';

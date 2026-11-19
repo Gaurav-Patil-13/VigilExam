@@ -412,6 +412,100 @@ class DBManager {
     return testObj;
   }
 
+  async addQuestionToTest(testId, questionObj) {
+    const store = this.getLocalData();
+    const testIndex = store.tests.findIndex((t) => t.id === testId);
+    if (testIndex === -1) return null;
+
+    const test = store.tests[testIndex];
+    if (!Array.isArray(test.questions)) {
+      test.questions = [];
+    }
+
+    const newQuestion = {
+      id: questionObj.id || `q-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      type: questionObj.type || 'mcq',
+      question: String(questionObj.question).trim(),
+      options: Array.isArray(questionObj.options) ? questionObj.options.map((o) => String(o).trim()) : [],
+      correct_answer: String(questionObj.correct_answer).trim(),
+      points: Number(questionObj.points) || 20,
+      code_template: questionObj.code_template || ''
+    };
+
+    test.questions.push(newQuestion);
+    test.total_marks = test.questions.reduce((sum, q) => sum + (Number(q.points) || 20), 0);
+    store.tests[testIndex] = test;
+    this.saveLocalData(store);
+
+    if (isMongoConnected()) {
+      try {
+        await Exam.findOneAndUpdate(
+          { id: testId },
+          {
+            $push: { questions: newQuestion },
+            $set: { total_marks: test.total_marks }
+          },
+          { new: true }
+        );
+      } catch (err) {
+        console.error('[MongoDB] Error adding question to Exam:', err.message);
+      }
+    }
+
+    return { test, question: newQuestion };
+  }
+
+  async deleteQuestionFromTest(testId, questionId) {
+    const store = this.getLocalData();
+    const testIndex = store.tests.findIndex((t) => t.id === testId);
+    if (testIndex === -1) return null;
+
+    const test = store.tests[testIndex];
+    if (!Array.isArray(test.questions)) {
+      test.questions = [];
+    }
+
+    test.questions = test.questions.filter((q) => q.id !== questionId);
+    test.total_marks = test.questions.reduce((sum, q) => sum + (Number(q.points) || 20), 0);
+    store.tests[testIndex] = test;
+    this.saveLocalData(store);
+
+    if (isMongoConnected()) {
+      try {
+        await Exam.findOneAndUpdate(
+          { id: testId },
+          {
+            $pull: { questions: { id: questionId } },
+            $set: { total_marks: test.total_marks }
+          },
+          { new: true }
+        );
+      } catch (err) {
+        console.error('[MongoDB] Error deleting question from Exam:', err.message);
+      }
+    }
+
+    return test;
+  }
+
+  async deleteTest(testId) {
+    const store = this.getLocalData();
+    const testIndex = store.tests.findIndex((t) => t.id === testId);
+    if (testIndex === -1) return false;
+
+    store.tests.splice(testIndex, 1);
+    this.saveLocalData(store);
+
+    if (isMongoConnected()) {
+      try {
+        await Exam.deleteOne({ id: testId });
+      } catch (err) {
+        console.error('[MongoDB] Error deleting Exam:', err.message);
+      }
+    }
+    return true;
+  }
+
   getAssignmentsByStudent(studentId) {
     const db = this.getLocalData();
     const assignedTestIds = (db.assignments || [])
