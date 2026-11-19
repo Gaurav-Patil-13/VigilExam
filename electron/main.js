@@ -31,6 +31,19 @@ let currentClipboardPolicy = { ...DEFAULT_CLIPBOARD_POLICY };
 let serverReadyPromise = null;
 
 async function ensureEmbeddedServer() {
+  const remoteUrl = process.env.VITE_API_URL;
+  if (remoteUrl && !remoteUrl.includes("localhost") && !remoteUrl.includes("127.0.0.1")) {
+    console.info(
+      "[ElectronLifecycle] Configured with cloud backend (" + remoteUrl + "); skipping embedded server."
+    );
+    return;
+  }
+
+  if (process.env.DISABLE_EMBEDDED_SERVER === "true") {
+    console.info("[ElectronLifecycle] Embedded server disabled via DISABLE_EMBEDDED_SERVER.");
+    return;
+  }
+
   if (app.isPackaged) {
     if (!serverReadyPromise) {
       serverReadyPromise = (async () => {
@@ -51,7 +64,11 @@ async function ensureEmbeddedServer() {
         }
       })();
     }
-    await serverReadyPromise;
+    // Ensure window startup is never permanently blocked by local server timeouts
+    await Promise.race([
+      serverReadyPromise,
+      new Promise((res) => setTimeout(res, 3000)),
+    ]);
   }
 }
 
